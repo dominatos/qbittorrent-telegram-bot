@@ -28,7 +28,7 @@ Choose one:
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/dominatos/qbittorrent-telegram-bot.git
-   cd qbot
+   cd qbittorrent-telegram-bot
    ```
 
 2. **Configure the bot**:
