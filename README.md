@@ -2,6 +2,12 @@
 
 A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send magnet links, `.torrent` files, or media directly through Telegram and organize them automatically.
 
+## Example Screenshots
+
+![Adding torrent](img/screen1.png)
+![status message](img/screen2.png)
+
+
 ## ✨ Features
 
 - 📥 **Add Torrents**: Send magnet links or `.torrent` files
@@ -173,18 +179,34 @@ chmod 644 data/bot_state.json
 
 ## 🖥️ Systemd Service (Advanced)
 
-For non-Docker deployments, use the provided systemd service:
+For production deployments on Linux without Docker, use the included systemd unit file for professional process management.
 
-1. Edit `qtg-torrent-bot.service`:
-   - Set `User=` and `Group=`
-   - Update paths
+### Configuration
+1. **Edit the unit file**:
+   ```bash
+   nano qtg-torrent-bot.service
+   ```
+   - Replace `<USER>` with your actual Linux username in `User=`, `Group=`, `ExecStart=`, and `WorkingDirectory=`.
+   - Ensure the path correctly points to your `qbot.php` script.
 
-2. Install:
+2. **Install the service**:
    ```bash
    sudo cp qtg-torrent-bot.service /etc/systemd/system/
    sudo systemctl daemon-reload
    sudo systemctl enable --now qtg-torrent-bot
    ```
+
+### Management
+- **Check Status**: `sudo systemctl status qtg-torrent-bot`
+- **View Logs**: `sudo journalctl -u qtg-torrent-bot -f`
+- **Restart**: `sudo systemctl restart qtg-torrent-bot`
+
+### Security Hardening Included
+The service file comes pre-configured with security best practices:
+- `ProtectSystem=full`: Makes `/usr`, `/boot`, and `/etc` read-only for the service.
+- `PrivateTmp=true`: Sets up a private `/tmp` directory.
+- `NoNewPrivileges=true`: Ensures no child processes can gain more privileges than the parent.
+- `Restart=always`: Automatically restarts the bot if it crashes.
 
 ## 📁 Project Structure
 
