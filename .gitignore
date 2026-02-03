@@ -1,0 +1,12 @@
+# Configuration with secrets
+config.php
+
+# Runtime state and logs
+data/
+bot_state.json
+*.log
+
+# Internal workflow files (optional)
+INSTRUCTIONS.md
+prompt.txt
+install.sh

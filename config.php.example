@@ -1,0 +1,58 @@
+<?php
+
+declare(strict_types=1);
+
+return [
+    // Telegram Bot Token (Get it from @BotFather)
+    'bot_token' => 'XXXX:XXXXX',
+
+    // List of Telegram, User IDs allowed to interact with the bot
+    'allowed_user_ids' => [
+        12345678,
+        // 87654321
+    ],
+
+    // File to store bot state (relative to script or absolute path)
+    'state_file' => __DIR__ . '/bot_state.json',
+
+    // Log file path
+    'log_file' => __DIR__ . '/bot.log',
+
+    // Mount points or disk paths
+    'disks' => [
+        '/mnt/ftp', 
+        '/mnt/ftp2'
+    ],
+    'default_disk_idx' => 0,
+
+    // qBittorrent Settings
+    'qb_url' => 'http://127.0.0.1:8080',
+    'qb_user' => 'admin',
+    'qb_pass' => 'xxxxxxx',
+    
+    // Action on torrent completion: 'stop', 'pause', 'remove'
+    'action_on_complete' => 'stop',
+
+    // Download categories/subdirectories
+    // Key = qBittorrent category / subfolder
+    // Value = Display Label in Telegram
+    'categories' => [
+        'tv' => '📺 Series',
+        'movies' => '🎬 Movies',
+        'download-pc' => '📁 Other',
+        'Music' => '🎵 Music',
+        'photo' => '🖼 Photo',
+        'cartoni' => '🧸 Cartoni'
+    ],
+
+    // Timings (in seconds)
+    'poll_timeout' => 10,
+    'check_interval' => 30,
+    'status_interval' => 86400,
+    'state_save_interval' => 300,
+    'notification_cleanup_time' => 120,
+
+    // Status command display options
+    'status_show_limit' => 10,      // Max torrents to show in /status (0 = unlimited)
+    'status_filter' => 'all',       // 'all' = show all torrents, 'downloading' = only active downloads
+];

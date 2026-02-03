@@ -1,0 +1,21 @@
+# Configuration files
+config.php
+bot_state.json
+
+# Logs
+*.log
+
+# Data directory
+data/
+
+# Git
+.git/
+.gitignore
+
+# Documentation and metadata
+README.md
+INSTRUCTIONS.md
+prompt.txt
+
+# Systemd
+*.service

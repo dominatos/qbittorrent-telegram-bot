@@ -1,0 +1,26 @@
+[Unit]
+Description=Telegram QTorrent Bot (PHP)
+After=network.target
+
+[Service]
+# Security Hardening
+ProtectSystem=full
+PrivateTmp=true
+NoNewPrivileges=true
+
+# User and Group (Modify these before deployment)
+User=<USER>
+Group=<USER>
+
+# Execution
+ExecStart=/usr/bin/php /home/<USER>/qtorrentbot/qbot.php
+WorkingDirectory=/home/<USER>/qtorrentbot
+
+# Restart Logic
+Restart=always
+RestartSec=10
+StartLimitInterval=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

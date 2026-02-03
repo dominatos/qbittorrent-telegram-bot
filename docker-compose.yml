@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  qbot:
+    build: .
+    container_name: qbot
+    restart: unless-stopped
+    volumes:
+      # Required: Configuration file
+      - ./config.php:/app/config.php:ro
+
+      # Data directory for state and logs
+      - ./data:/app/data
+      # Optional: Mount download directories from your config
+      # Adjust according to your config.php 'disks' setting
+      - /mnt/ftp:/mnt/ftp
+      - /mnt/ftp2:/mnt/ftp2
+
+    network_mode: host
+
+    # Environment variables (optional)
+    environment:
+      - TZ=UTC
