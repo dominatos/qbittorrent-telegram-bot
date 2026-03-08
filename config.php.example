@@ -55,4 +55,12 @@ return [
     // Status command display options
     'status_show_limit' => 10,      // Max torrents to show in /status (0 = unlimited)
     'status_filter' => 'all',       // 'all' = show all torrents, 'downloading' = only active downloads
+
+    // TorrServer Settings
+    'torrserver_enabled' => false,
+    'torrserver_url' => 'http://127.0.0.1:8090',
+    'torrserver_check_interval' => 60,
+    'torrserver_user' => '', // Add if auth is enabled
+    'torrserver_pass' => '', // Add if auth is enabled
+    'torrserver_dl_limit_mbit' => 100, // Download speed limit in Mbit/s for TorrServer downloads
 ];

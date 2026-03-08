@@ -11,10 +11,10 @@ A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send
 ## ✨ Features
 
 - 📥 **Add Torrents**: Send magnet links or `.torrent` files
-- 📁 **Smart Organization**: Interactive disk and category selection
+- 📁 **Smart Organization**: Interactive disk selection showing **Available Space**
 - 📊 **Status Tracking**: Real-time download monitoring with `/status`
 - 🔔 **Notifications**: Automatic alerts on completion
-- 🖼️ **Media Support**: Upload small files (<20MB) directly to your server
+- 🎬 **TorrServer Integration**: Rich notifications with **posters**, file names/sizes, and automatic **speed limits**
 - 🔒 **Access Control**: User ID whitelist for security
 
 ## 📋 Prerequisites
@@ -114,6 +114,26 @@ volumes:
 > docker compose build --no-cache
 > docker compose up -d
 > ```
+
+## 🎬 TorrServer Integration
+
+The bot integrates with [TorrServer](https://github.com/YouROK/TorrServer) to monitor what you are watching and offer a one-click download to qBittorrent.
+
+### Features
+- **Rich Notifications**: Includes movie/series posters, file names, and perceived size.
+- **Smart Labels**: Automatically identifies if media is a single file or a series.
+- **Speed Limits**: Automatically applies a configurable download limit (e.g., 100Mbit/s) so your viewing experience isn't interrupted by background downloads.
+- **Disk Space**: The destination menu displays real-time available space (GB) for each configured disk.
+
+### Configuration
+```php
+    'torrserver_enabled' => true,
+    'torrserver_url' => 'http://127.0.0.1:8090',
+    'torrserver_check_interval' => 60,
+    'torrserver_user' => 'torr_user',
+    'torrserver_pass' => 'torr_pass',
+    'torrserver_dl_limit_mbit' => 100, // Limit background downloads to 100Mbit/s
+```
 
 ## 📖 Usage
 

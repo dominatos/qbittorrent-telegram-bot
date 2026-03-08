@@ -30,11 +30,13 @@ final class QBittorrentBot
     private array $lastStatusMessageIds = [];
     private array $knownChatIds = [];
     private array $notifiedTorrentIds = [];
+    private array $notifiedTorrHashes = [];
     private array $pendingDeletions = [];
     private ?string $qbCookie = null;
 
     private int $offset = 0;
     private int $lastCheck = 0;
+    private int $lastTorrCheck = 0;
     private int $lastStatus = 0;
     private int $lastSave = 0;
     private LoggerInterface $logger;
@@ -57,20 +59,28 @@ final class QBittorrentBot
             'file' => 'https://api.telegram.org/file/bot' . $this->config['bot_token'] . '/'
         ];
 
-        $logFile = $this->config['log_file'] ?? __DIR__ . '/bot.log';
+        $logFile = $this->config['log_file'] ?? __DIR__ . '/data/bot.log';
+        $logDir = dirname($logFile);
+        if (!is_dir($logDir)) {
+            @mkdir($logDir, 0775, true);
+        }
+
         $this->logger = new class ($logFile) implements LoggerInterface {
             private string $logFile;
             public function __construct(string $logFile)
             {
-                $this->logFile = $logFile; }
+                $this->logFile = $logFile;
+            }
             public function error(string $msg): void
             {
-                error_log("[" . date('Y-m-d H:i:s') . "] ERROR: $msg\n", 3, $this->logFile);
-                echo "ERROR: $msg\n"; }
+                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] ERROR: $msg\n", FILE_APPEND);
+                echo "ERROR: $msg\n";
+            }
             public function info(string $msg): void
             {
-                error_log("[" . date('Y-m-d H:i:s') . "] INFO: $msg\n", 3, $this->logFile);
-                echo "INFO: $msg\n"; }
+                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] INFO: $msg\n", FILE_APPEND);
+                echo "INFO: $msg\n";
+            }
         };
 
         $this->loadState();
@@ -79,17 +89,35 @@ final class QBittorrentBot
 
     private function loadState(): void
     {
-        $stateFile = $this->config['state_file'] ?? __DIR__ . '/bot_state.json';
-        if (!file_exists($stateFile))
-            return;
+        $stateFile = $this->config['state_file'] ?? __DIR__ . '/data/bot_state.json';
+        if (!file_exists($stateFile)) {
+            // Check legacy location just in case
+            $legacy = __DIR__ . '/bot_state.json';
+            if (file_exists($legacy)) {
+                $stateFile = $legacy;
+            } else {
+                return;
+            }
+        }
         $state = json_decode(file_get_contents($stateFile), true);
         if (is_array($state)) {
             $this->knownChatIds = $state['known_chats'] ?? [];
             $this->notifiedTorrentIds = $state['notified_torrents'] ?? [];
+            $this->notifiedTorrHashes = $state['notified_torr_hashes'] ?? [];
             // Handle both old format (single ID) and new format (array of IDs)
             $statusIds = $state['last_status_ids'] ?? [];
             foreach ($statusIds as $chatId => $ids) {
                 $this->lastStatusMessageIds[$chatId] = is_array($ids) ? $ids : [$ids];
+            }
+        }
+
+        // Feature: Automatically add allowed users to known chats so they receive
+        // notifications even if they haven't messaged the bot yet (e.g. fresh state).
+        if (!empty($this->config['allowed_user_ids'])) {
+            foreach ($this->config['allowed_user_ids'] as $uid) {
+                if (!in_array($uid, $this->knownChatIds)) {
+                    $this->knownChatIds[] = $uid;
+                }
             }
         }
     }
@@ -99,10 +127,15 @@ final class QBittorrentBot
         $state = [
             'known_chats' => array_values(array_unique($this->knownChatIds)),
             'notified_torrents' => $this->notifiedTorrentIds,
+            'notified_torr_hashes' => $this->notifiedTorrHashes,
             'last_status_ids' => $this->lastStatusMessageIds,
             'timestamp' => time()
         ];
-        $stateFile = $this->config['state_file'] ?? __DIR__ . '/bot_state.json';
+        $stateFile = $this->config['state_file'] ?? __DIR__ . '/data/bot_state.json';
+        $stateDir = dirname($stateFile);
+        if (!is_dir($stateDir)) {
+            @mkdir($stateDir, 0775, true);
+        }
         file_put_contents($stateFile, json_encode($state));
     }
 
@@ -133,6 +166,16 @@ final class QBittorrentBot
         return $this->tgApiRequest('sendMessage', $params);
     }
 
+    private function tgSendPhoto(int $chatId, string $photo, string $caption, ?string $parseMode = null, ?array $replyMarkup = null): mixed
+    {
+        $params = ['chat_id' => $chatId, 'photo' => $photo, 'caption' => $caption];
+        if ($parseMode)
+            $params['parse_mode'] = $parseMode;
+        if ($replyMarkup)
+            $params['reply_markup'] = json_encode($replyMarkup);
+        return $this->tgApiRequest('sendPhoto', $params);
+    }
+
     private function tgCategoryKeyboard(int $currentDiskIdx): array
     {
         $buttons = [];
@@ -141,7 +184,15 @@ final class QBittorrentBot
         }
         $diskRow = [];
         foreach ($this->config['disks'] as $idx => $path) {
-            $label = ($idx === $currentDiskIdx) ? "✅ Disk " . ($idx + 1) : "💾 D" . ($idx + 1);
+            $freeInfo = "";
+            if (is_dir($path)) {
+                $freeSpace = @disk_free_space($path);
+                if ($freeSpace !== false) {
+                    $freeGb = round($freeSpace / 1024 / 1024 / 1024, 1);
+                    $freeInfo = " [{$freeGb}GB]";
+                }
+            }
+            $label = (($idx === $currentDiskIdx) ? "✅ Disk " . ($idx + 1) : "💾 D" . ($idx + 1)) . $freeInfo;
             $diskRow[] = ['text' => $label, 'callback_data' => "set_disk:$idx"];
         }
         $buttons[] = $diskRow;
@@ -152,33 +203,53 @@ final class QBittorrentBot
 
     private function qbLogin(): bool
     {
+        $this->logger->info("Attempting qBittorrent login at " . $this->config['qb_url']);
         $ch = curl_init($this->config['qb_url'] . '/api/v2/auth/login');
         curl_setopt_array($ch, [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => http_build_query(['username' => $this->config['qb_user'], 'password' => $this->config['qb_pass']]),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HEADER => true
+            CURLOPT_HEADER => true,
+            CURLOPT_TIMEOUT => 10
         ]);
-        $resp = (string) curl_exec($ch);
+        $resp = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+
+        if ($resp === false) {
+            $this->logger->error("qbLogin curl failed: $err");
+            curl_close($ch);
+            return false;
+        }
+
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
-        $header = substr($resp, 0, $headerSize);
+        $header = substr((string) $resp, 0, $headerSize);
         curl_close($ch);
+
         if (preg_match('/set-cookie:\s*(SID=[^;\s]+)/i', $header, $matches)) {
             $this->qbCookie = $matches[1];
+            $this->logger->info("qBittorrent login successful. Cookie set.");
             return true;
         }
+
+        $this->logger->error("qBittorrent login failed. HTTP Code: $code. Response: " . substr((string) $resp, $headerSize));
         return false;
     }
 
     private function qbRequest(string $endpoint, array $params = [], bool $isPost = false, bool $isFile = false)
     {
-        if (!$this->qbCookie && !$this->qbLogin())
+        if (!$this->qbCookie && !$this->qbLogin()) {
+            $this->logger->error("qbRequest failed: No login cookie.");
             return null;
+        }
         $url = $this->config['qb_url'] . $endpoint;
+        $this->logger->info("qbRequest: $endpoint " . ($isPost ? "POST" : "GET") . " params: " . json_encode($params));
+
         $ch = curl_init($url . (!$isPost ? '?' . http_build_query($params) : ''));
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_COOKIE => $this->qbCookie
+            CURLOPT_COOKIE => $this->qbCookie,
+            CURLOPT_TIMEOUT => 15
         ]);
         if ($isPost) {
             curl_setopt($ch, CURLOPT_POST, true);
@@ -190,11 +261,21 @@ final class QBittorrentBot
         }
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
         curl_close($ch);
+
         if ($code === 403) {
+            $this->logger->info("qbRequest got 403, re-logging in...");
             $this->qbCookie = null;
             return $this->qbRequest($endpoint, $params, $isPost, $isFile);
         }
+
+        if ($res === false) {
+            $this->logger->error("qbRequest curl failed: $err");
+            return null;
+        }
+
+        $this->logger->info("qbRequest $endpoint returned code $code");
         return in_array($code, [200, 201]) ? (json_decode((string) $res, true) ?: $res) : null;
     }
 
@@ -272,22 +353,114 @@ final class QBittorrentBot
     {
         $chatId = $cb['message']['chat']['id'];
         $data = $cb['data'];
+        $this->logger->info("Received callback data: $data from chat: $chatId");
+
         $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
 
         if (str_starts_with($data, 'set_disk:')) {
             $idx = (int) substr($data, 9);
             $this->pendingDownloads[$chatId]['disk_idx'] = $idx;
-            $this->tgApiRequest('editMessageText', [
-                'chat_id' => $chatId,
-                'message_id' => $cb['message']['message_id'],
-                'text' => "💿 Disk: " . $this->config['disks'][$idx] . "\nChoose category:",
-                'reply_markup' => json_encode($this->tgCategoryKeyboard($idx))
-            ]);
+
+            // If the original message is a photo, we can only edit its caption and markup using editMessageCaption
+            if (isset($cb['message']['photo'])) {
+                $this->tgApiRequest('editMessageCaption', [
+                    'chat_id' => $chatId,
+                    'message_id' => $cb['message']['message_id'],
+                    'caption' => "💿 Disk: " . $this->config['disks'][$idx] . "\nChoose category:",
+                    'reply_markup' => json_encode($this->tgCategoryKeyboard($idx))
+                ]);
+            } else {
+                $this->tgApiRequest('editMessageText', [
+                    'chat_id' => $chatId,
+                    'message_id' => $cb['message']['message_id'],
+                    'text' => "💿 Disk: " . $this->config['disks'][$idx] . "\nChoose category:",
+                    'reply_markup' => json_encode($this->tgCategoryKeyboard($idx))
+                ]);
+            }
+            $this->logger->info("set_disk updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
             $path = $this->config['disks'][$this->pendingDownloads[$chatId]['disk_idx'] ?? 0] . '/' . $sub;
             $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
             $this->finalizeDownload($chatId, $path);
+        } elseif (str_starts_with($data, 'ts_dl:')) {
+            $hash = substr($data, 6);
+            $this->logger->info("ts_dl requested for hash: $hash");
+            $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id']);
+        } elseif (str_starts_with($data, 'ts_ignore:')) {
+            $hash = substr($data, 10);
+            if (!in_array($hash, $this->notifiedTorrHashes)) {
+                $this->notifiedTorrHashes[] = $hash;
+                $this->saveState();
+            }
+            $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
+        }
+    }
+
+    private function handleTorrServerDownload(int $chatId, string $hash, array $message, int $messageId): void
+    {
+        $this->logger->info("handleTorrServerDownload started for $hash");
+        $res = $this->torrServerRequest('/torrents', ['action' => 'list']);
+        if (!is_array($res)) {
+            $this->logger->error("Could not reach TorrServer during handleTorrServerDownload");
+            $this->tgSendMessage($chatId, "❌ Could not reach TorrServer.");
+            return;
+        }
+
+        $target = null;
+        foreach ($res as $t) {
+            if ($t['hash'] === $hash) {
+                $target = $t;
+                break;
+            }
+        }
+
+        if (!$target) {
+            $this->logger->error("Torrent $hash not found in TorrServer list");
+            $this->tgSendMessage($chatId, "❌ Torrent not found in TorrServer.");
+            return;
+        }
+
+        $magnet = "";
+        if (!empty($target['magnet'])) {
+            $magnet = $target['magnet'];
+        } else {
+            $title = urlencode($target['title'] ?? 'Unknown');
+            $magnet = "magnet:?xt=urn:btih:{$target['hash']}&dn={$title}";
+        }
+        $this->logger->info("Generated/Found magnet: $magnet");
+
+        $this->pendingDownloads[$chatId] = [
+            'type' => 'magnet',
+            'magnet' => $magnet,
+            'disk_idx' => $this->config['default_disk_idx'],
+            'source' => 'torrserver'
+        ];
+
+        // If the original message was a photo, we must use editMessageCaption.
+        // Or we can delete the photo message and send a text one.
+        if (isset($message['photo'])) {
+            $this->tgApiRequest('editMessageCaption', [
+                'chat_id' => $chatId,
+                'message_id' => $messageId,
+                'caption' => "📥 From TorrServer: `{$target['title']}`\nChoose destination:",
+                'parse_mode' => 'Markdown',
+                'reply_markup' => json_encode($this->tgCategoryKeyboard($this->config['default_disk_idx']))
+            ]);
+        } else {
+            $this->tgApiRequest('editMessageText', [
+                'chat_id' => $chatId,
+                'message_id' => $messageId,
+                'text' => "📥 From TorrServer: `{$target['title']}`\nChoose destination:",
+                'parse_mode' => 'Markdown',
+                'reply_markup' => json_encode($this->tgCategoryKeyboard($this->config['default_disk_idx']))
+            ]);
+        }
+        $this->logger->info("Edited message to show destination keyboard.");
+
+        if (!in_array($hash, $this->notifiedTorrHashes)) {
+            $this->notifiedTorrHashes[] = $hash;
+            $this->saveState();
         }
     }
 
@@ -302,9 +475,39 @@ final class QBittorrentBot
             @mkdir($dir, 0775, true);
 
         $msgText = "";
+        $success = false;
         if ($p['type'] === 'magnet') {
-            $this->qbRequest('/api/v2/torrents/add', ['urls' => $p['magnet'], 'savepath' => $dir], true);
-            $msgText = "✅ Magnet added to qBit.\nDir: `{$dir}`";
+            $payload = ['urls' => $p['magnet'], 'savepath' => $dir];
+
+            // Figure out speed limit
+            $limitBytesPerSec = 0;
+            $limitMbit = 0;
+            if (($p['source'] ?? '') === 'torrserver') {
+                $limitMbit = (int) ($this->config['torrserver_dl_limit_mbit'] ?? 100);
+                if ($limitMbit > 0) {
+                    $limitBytesPerSec = (int) ($limitMbit * 1024 * 1024 / 8);
+                }
+            }
+
+            $res = $this->qbRequest('/api/v2/torrents/add', $payload, true);
+            $this->logger->info("qbRequest torrents/add returned: " . json_encode($res));
+            if ($res !== null) {
+                $limitInfo = "";
+
+                // qBittorrent often ignores dlLimit when adding magnets. Enforce it directly:
+                if ($limitBytesPerSec > 0 && preg_match('/urn:btih:([a-zA-Z0-9]+)/i', $p['magnet'], $m)) {
+                    $hash = $m[1];
+                    // Even if metadata is not downloaded, the torrent is registered immediately by hash
+                    $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitBytesPerSec], true);
+                    $this->logger->info("Applied manual download limit $limitBytesPerSec to $hash");
+                    $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s";
+                }
+
+                $msgText = "✅ Magnet added to qBit.\nDir: `{$dir}`$limitInfo";
+                $success = true;
+            } else {
+                $msgText = "❌ Failed to add magnet to qBit. Check bot.log for details.";
+            }
         } else {
             $fileInfo = $this->tgApiRequest('getFile', ['file_id' => $p['file_id']]);
             if (!$fileInfo) {
@@ -321,17 +524,26 @@ final class QBittorrentBot
             fclose($fp);
 
             if ($p['type'] === 'file') {
-                $this->qbRequest('/api/v2/torrents/add', ['torrents' => new CURLFile($local), 'savepath' => $dir], true, true);
-                $msgText = "✅ Torrent added.\nDir: `{$dir}`";
+                $res = $this->qbRequest('/api/v2/torrents/add', ['torrents' => new CURLFile($local), 'savepath' => $dir], true, true);
+                if ($res !== null) {
+                    $msgText = "✅ Torrent added.\nDir: `{$dir}`";
+                    $success = true;
+                } else {
+                    $msgText = "❌ Failed to add torrent to qBit.";
+                }
                 @unlink($local);
             } else {
-                @rename($local, $dir . '/' . basename($local));
-                $msgText = "✅ Media saved to `{$dir}`";
+                if (@rename($local, $dir . '/' . basename($local))) {
+                    $msgText = "✅ Media saved to `{$dir}`";
+                    $success = true;
+                } else {
+                    $msgText = "❌ Failed to move media file.";
+                }
             }
         }
 
         $res = $this->tgSendMessage($chatId, $msgText, 'Markdown');
-        if ($res && isset($res['message_id'])) {
+        if ($success && $res && isset($res['message_id'])) {
             $this->pendingDeletions[] = ['chat_id' => $chatId, 'message_id' => $res['message_id'], 'expires' => time() + $this->config['notification_cleanup_time']];
         }
     }
@@ -408,6 +620,120 @@ final class QBittorrentBot
         }
     }
 
+    private function torrServerRequest(string $endpoint, array $data = []): mixed
+    {
+        $url = rtrim($this->config['torrserver_url'], '/') . $endpoint;
+        $this->logger->info("Requesting TorrServer: $url " . (empty($data) ? "POST action=list" : json_encode($data)));
+        $ch = curl_init($url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+        if (!empty($this->config['torrserver_user'])) {
+            $this->logger->info("Using TorrServer credentials: " . $this->config['torrserver_user']);
+            curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+            curl_setopt($ch, CURLOPT_USERPWD, $this->config['torrserver_user'] . ":" . ($this->config['torrserver_pass'] ?? ''));
+        }
+        if (!empty($data)) {
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+        }
+        $res = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($res === false) {
+            $this->logger->error("TorrServer request failed: Curl error");
+        } else {
+            $this->logger->info("TorrServer responded with code $code");
+        }
+        return json_decode((string) $res, true);
+    }
+
+    private function checkTorrServer(): void
+    {
+        if (!($this->config['torrserver_enabled'] ?? false))
+            return;
+
+        $this->logger->info("Checking TorrServer for new torrents...");
+        $torrents = $this->torrServerRequest('/torrents', ['action' => 'list']);
+        if (!is_array($torrents)) {
+            $this->logger->error("TorrServer response is not an array: " . gettype($torrents));
+            return;
+        }
+
+        $this->logger->info("Found " . count($torrents) . " torrents in TorrServer.");
+
+        foreach ($torrents as $t) {
+            $hash = $t['hash'];
+            if (in_array($hash, $this->notifiedTorrHashes))
+                continue;
+
+            $name = $t['title'] ?? '';
+            // If TorrServer hasn't finished loading the torrent, title might be empty or "Unknown"
+            if (empty($name) || $name === 'Unknown') {
+                $this->logger->info("Skipping notification for hash $hash: Title not ready yet.");
+                continue;
+            }
+
+            $this->logger->info("Processing new torrent $hash ($name)");
+
+            $poster = $t['poster'] ?? '';
+            $fileInfoStr = "";
+            $totalSize = $t['torrent_size'] ?? 0;
+
+            if (!empty($t['data'])) {
+                $parsedData = json_decode($t['data'], true);
+                if ($parsedData && isset($parsedData['TorrServer']['Files']) && is_array($parsedData['TorrServer']['Files'])) {
+                    $files = $parsedData['TorrServer']['Files'];
+                    if (count($files) === 1) {
+                        $fName = basename($files[0]['path'] ?? '');
+                        $fSize = $files[0]['length'] ?? 0;
+                        if ($fSize > 0) {
+                            $fSizeMb = round($fSize / 1024 / 1024, 1);
+                            $fileInfoStr = "\n📄 File: `{$fName}`\n📦 Size: {$fSizeMb} MB";
+                        }
+                    } else {
+                        $totalSizeMb = round($totalSize / 1024 / 1024, 1);
+                        $fileInfoStr = "\n📺 Episodes: " . count($files) . "\n📦 Total Size: {$totalSizeMb} MB";
+                    }
+                }
+            }
+
+            if (empty($fileInfoStr) && $totalSize > 0) {
+                $totalSizeMb = round($totalSize / 1024 / 1024, 1);
+                $fileInfoStr = "\n📦 Size: {$totalSizeMb} MB";
+            }
+
+            $msg = "🎬 *New in TorrServer:*\n\n`{$name}`{$fileInfoStr}\n\nDownload to qBit?";
+
+            $keyboard = [
+                'inline_keyboard' => [
+                    [
+                        ['text' => '✅ Download', 'callback_data' => "ts_dl:{$hash}"],
+                        ['text' => '🙈 Ignore', 'callback_data' => "ts_ignore:{$hash}"]
+                    ]
+                ]
+            ];
+
+            $this->logger->info("Sending message to known chats. Count: " . count($this->knownChatIds));
+            foreach ($this->knownChatIds as $cid) {
+                if (!empty($poster)) {
+                    $res = $this->tgSendPhoto($cid, $poster, $msg, 'Markdown', $keyboard);
+                    if (!$res)
+                        $this->logger->error("Failed to send photo to $cid");
+                } else {
+                    $res = $this->tgSendMessage($cid, $msg, 'Markdown', $keyboard);
+                    if (!$res)
+                        $this->logger->error("Failed to send text to $cid");
+                }
+            }
+
+            $this->notifiedTorrHashes[] = $hash;
+            $this->saveState();
+            $this->logger->info("Saved state for hash $hash");
+        }
+    }
+
     public function run(): void
     {
         $this->logger->info("Bot started.");
@@ -424,6 +750,10 @@ final class QBittorrentBot
                 if ($now - $this->lastCheck >= $this->config['check_interval']) {
                     $this->checkTorrentCompletions();
                     $this->lastCheck = $now;
+                }
+                if ($now - $this->lastTorrCheck >= ($this->config['torrserver_check_interval'] ?? 60)) {
+                    $this->checkTorrServer();
+                    $this->lastTorrCheck = $now;
                 }
                 if ($now - $this->lastSave >= $this->config['state_save_interval']) {
                     $this->saveState();
@@ -450,4 +780,5 @@ try {
     error_log($e->getMessage());
     exit(1);
 }
+
 
