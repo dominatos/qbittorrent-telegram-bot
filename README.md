@@ -6,6 +6,7 @@ A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send
 
 ![Adding torrent](img/screen1.png)
 ![status message](img/screen2.png)
+![torr new torrent ](img/torr-new-torrent.jpg)
 
 
 ## ✨ Features
