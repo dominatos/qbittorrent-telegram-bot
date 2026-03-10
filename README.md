@@ -67,10 +67,37 @@ Choose one:
 
 2. **Configure** (see step 2 above)
 
-3. **Run the bot**:
+3. **Run the bot** (interactive):
    ```bash
    php qbot.php
    ```
+
+4. **Running as a Systemd Service** (Production):
+   For production deployments without Docker, use the included systemd unit file.
+
+   **Configuration**:
+   - Edit the unit file: `nano qtg-torrent-bot.service`
+   - Replace `<USER>` with your Linux username in `User=`, `Group=`, `ExecStart=`, and `WorkingDirectory=`.
+   - Ensure the path correctly points to your `qbot.php` script.
+
+   **Installation**:
+   ```bash
+   sudo cp qtg-torrent-bot.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now qtg-torrent-bot
+   ```
+
+   **Management**:
+   - **Check Status**: `sudo systemctl status qtg-torrent-bot`
+   - **View Logs**: `sudo journalctl -u qtg-torrent-bot -f`
+   - **Restart**: `sudo systemctl restart qtg-torrent-bot`
+
+   **Security Hardening**:
+   The service file comes pre-configured with security best practices:
+   - `ProtectSystem=full`: Makes `/usr`, `/boot`, and `/etc` read-only.
+   - `PrivateTmp=true`: Sets up a private `/tmp`.
+   - `NoNewPrivileges=true`: Ensures no child processes gain privileges.
+   - `Restart=always`: Automatically restarts if the bot crashes.
 
 ## ⚙️ Configuration
 
@@ -198,36 +225,6 @@ chmod 644 data/bot_state.json
 - **Docker**: Ensure volumes are correctly mapped in `docker-compose.yml`
 - **Verify paths** in `config.php` match your system
 
-## 🖥️ Systemd Service (Advanced)
-
-For production deployments on Linux without Docker, use the included systemd unit file for professional process management.
-
-### Configuration
-1. **Edit the unit file**:
-   ```bash
-   nano qtg-torrent-bot.service
-   ```
-   - Replace `<USER>` with your actual Linux username in `User=`, `Group=`, `ExecStart=`, and `WorkingDirectory=`.
-   - Ensure the path correctly points to your `qbot.php` script.
-
-2. **Install the service**:
-   ```bash
-   sudo cp qtg-torrent-bot.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable --now qtg-torrent-bot
-   ```
-
-### Management
-- **Check Status**: `sudo systemctl status qtg-torrent-bot`
-- **View Logs**: `sudo journalctl -u qtg-torrent-bot -f`
-- **Restart**: `sudo systemctl restart qtg-torrent-bot`
-
-### Security Hardening Included
-The service file comes pre-configured with security best practices:
-- `ProtectSystem=full`: Makes `/usr`, `/boot`, and `/etc` read-only for the service.
-- `PrivateTmp=true`: Sets up a private `/tmp` directory.
-- `NoNewPrivileges=true`: Ensures no child processes can gain more privileges than the parent.
-- `Restart=always`: Automatically restarts the bot if it crashes.
 
 ## 📁 Project Structure
 
