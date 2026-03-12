@@ -21,6 +21,8 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
+    public const VERSION = '1.1.0';
+
     // =================== CONFIGURATION ===================
     private array $config;
 
@@ -31,6 +33,7 @@ final class QBittorrentBot
     private array $knownChatIds = [];
     private array $notifiedTorrentIds = [];
     private array $notifiedTorrHashes = [];
+    private array $torrServerMsgIds = []; // hash => [['chat_id'=>int,'message_id'=>int], ...]
     private array $pendingDeletions = [];
     private ?string $qbCookie = null;
 
@@ -153,7 +156,11 @@ final class QBittorrentBot
         $res = curl_exec($ch);
         curl_close($ch);
         $data = json_decode((string) $res, true);
-        return ($data && isset($data['ok']) && $data['ok']) ? $data['result'] : null;
+        if (!$data || !isset($data['ok']) || !$data['ok']) {
+            $this->logger->error("tgApiRequest failed for method $method. Response: " . (string) $res);
+            return null;
+        }
+        return $data['result'];
     }
 
     private function tgSendMessage(int $chatId, string $text, ?string $parseMode = null, ?array $replyMarkup = null): mixed
@@ -387,6 +394,7 @@ final class QBittorrentBot
             $hash = substr($data, 6);
             $this->logger->info("ts_dl requested for hash: $hash");
             $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id']);
+            $this->deleteOtherTorrServerMessages($hash, $chatId);
         } elseif (str_starts_with($data, 'ts_ignore:')) {
             $hash = substr($data, 10);
             if (!in_array($hash, $this->notifiedTorrHashes)) {
@@ -394,6 +402,7 @@ final class QBittorrentBot
                 $this->saveState();
             }
             $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
+            $this->deleteOtherTorrServerMessages($hash, $chatId);
         }
     }
 
@@ -425,8 +434,14 @@ final class QBittorrentBot
         if (!empty($target['magnet'])) {
             $magnet = $target['magnet'];
         } else {
+            $hash = preg_replace('/[^a-fA-F0-9]/', '', $target['hash']);
+            if (strlen($hash) !== 40 && strlen($hash) !== 32) {
+                $this->logger->error("Invalid torrent hash: {$target['hash']}");
+                $this->tgSendMessage($chatId, "❌ Invalid torrent hash format.");
+                return;
+            }
             $title = urlencode($target['title'] ?? 'Unknown');
-            $magnet = "magnet:?xt=urn:btih:{$target['hash']}&dn={$title}";
+            $magnet = "magnet:?xt=urn:btih:{$hash}&dn={$title}";
         }
         $this->logger->info("Generated/Found magnet: $magnet");
 
@@ -719,12 +734,18 @@ final class QBittorrentBot
             foreach ($this->knownChatIds as $cid) {
                 if (!empty($poster)) {
                     $res = $this->tgSendPhoto($cid, $poster, $msg, 'Markdown', $keyboard);
-                    if (!$res)
+                    if ($res && isset($res['message_id'])) {
+                        $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
+                    } else {
                         $this->logger->error("Failed to send photo to $cid");
+                    }
                 } else {
                     $res = $this->tgSendMessage($cid, $msg, 'Markdown', $keyboard);
-                    if (!$res)
+                    if ($res && isset($res['message_id'])) {
+                        $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
+                    } else {
                         $this->logger->error("Failed to send text to $cid");
+                    }
                 }
             }
 
@@ -734,9 +755,26 @@ final class QBittorrentBot
         }
     }
 
+    private function deleteOtherTorrServerMessages(string $hash, int $actingChatId): void
+    {
+        if (empty($this->torrServerMsgIds[$hash])) {
+            return;
+        }
+        foreach ($this->torrServerMsgIds[$hash] as $entry) {
+            if ((int) $entry['chat_id'] !== $actingChatId) {
+                $this->tgApiRequest('deleteMessage', [
+                    'chat_id' => $entry['chat_id'],
+                    'message_id' => $entry['message_id']
+                ]);
+                $this->logger->info("Deleted TorrServer notification for hash $hash from chat {$entry['chat_id']}");
+            }
+        }
+        unset($this->torrServerMsgIds[$hash]);
+    }
+
     public function run(): void
     {
-        $this->logger->info("Bot started.");
+        $this->logger->info("Bot v" . self::VERSION . " started.");
         while (true) {
             try {
                 $updates = $this->tgApiRequest('getUpdates', ['offset' => $this->offset + 1, 'timeout' => $this->config['poll_timeout']]);
@@ -772,6 +810,12 @@ final class QBittorrentBot
             usleep(100000);
         }
     }
+}
+
+$opts = getopt('v', ['version']);
+if (isset($opts['v']) || isset($opts['version'])) {
+    echo "QBittorrent Telegram Bot v" . QBittorrentBot::VERSION . "\n";
+    exit(0);
 }
 
 try {
