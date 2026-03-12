@@ -21,7 +21,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.1.1';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -42,6 +42,7 @@ final class QBittorrentBot
     private int $lastTorrCheck = 0;
     private int $lastStatus = 0;
     private int $lastSave = 0;
+    private int $torrServerFailCount = 0;
     private LoggerInterface $logger;
 
     public function __construct()
@@ -673,8 +674,16 @@ final class QBittorrentBot
         $torrents = $this->torrServerRequest('/torrents', ['action' => 'list']);
         if (!is_array($torrents)) {
             $this->logger->error("TorrServer response is not an array: " . gettype($torrents));
+            $this->torrServerFailCount++;
+            if ($this->torrServerFailCount >= 5) {
+                foreach ($this->knownChatIds as $cid) {
+                    $this->tgSendMessage($cid, "⚠️ TorrServer unavailable after 5 attempts. Please check the service.");
+                }
+                $this->torrServerFailCount = 0;
+            }
             return;
         }
+        $this->torrServerFailCount = 0;
 
         $this->logger->info("Found " . count($torrents) . " torrents in TorrServer.");
 
