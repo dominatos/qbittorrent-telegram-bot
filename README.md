@@ -1,6 +1,6 @@
 # qbot - Telegram Bot for qBittorrent
 
-A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send magnet links, `.torrent` files, or media directly through Telegram and organize them automatically.
+A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send magnet links, `.torrent` files, video URLs (YouTube, Vimeo, etc.), or media directly through Telegram(limit 20mb for files) and organize them automatically.
 
 ## Example Screenshots
 
@@ -12,6 +12,7 @@ A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send
 ## ✨ Features
 
 - 📥 **Add Torrents**: Send magnet links or `.torrent` files
+- 🎬 **yt-dlp Downloads**: Send YouTube/Vimeo/Twitter/etc. URLs for direct video downloads
 - 📁 **Smart Organization**: Interactive disk selection showing **Available Space**
 - 📊 **Status Tracking**: Real-time download monitoring with `/status`
 - 🔔 **Notifications**: Automatic alerts on completion
@@ -22,7 +23,7 @@ A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send
 
 Choose one:
 - **Docker** (recommended): Docker & Docker Compose
-- **Manual**: PHP 8.0+ with `php-curl` extension
+- **Manual**: PHP 8.0+ with `php-curl` extension, plus `yt-dlp` and `ffmpeg` for video downloads
 
 ## 🚀 Quick Start (Docker)
 
@@ -60,14 +61,24 @@ Choose one:
    ```bash
    # Debian/Ubuntu
    sudo apt install php8.2-cli php8.2-curl
-   
+
    # Alpine
    apk add php82-cli php82-curl
    ```
 
-2. **Configure** (see step 2 above)
+2. **Install yt-dlp** (optional, for video downloads):
+   ```bash
+   # Debian/Ubuntu
+   sudo apt install yt-dlp ffmpeg
 
-3. **Run the bot** (interactive):
+   # Or via pip (latest version)
+   pip3 install yt-dlp
+   sudo apt install ffmpeg
+   ```
+
+3. **Configure** (see step 2 above)
+
+4. **Run the bot** (interactive):
    ```bash
    php qbot.php
    ```
@@ -163,12 +174,53 @@ The bot integrates with [TorrServer](https://github.com/YouROK/TorrServer) to mo
     'torrserver_dl_limit_mbit' => 100, // Limit background downloads to 100Mbit/s
 ```
 
+## 🎬 yt-dlp Integration
+
+The bot supports downloading videos from YouTube, Vimeo, Twitter/X, and many other platforms via [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+
+### Features
+- **Multi-Platform**: YouTube, Vimeo, Twitter/X, Instagram, TikTok, Reddit, Twitch, Dailymotion and more
+- **Same Workflow**: Uses the same disk/category selection menu as torrents
+- **Non-Blocking**: Downloads run in the background — the bot stays responsive
+- **Completion Notifications**: Automatic success/failure notifications when downloads finish
+- **Configurable Quality**: Set your preferred video format/quality
+- **Domain Allowlist**: Control which domains are accepted
+
+### Configuration
+```php
+    'ytdlp_enabled' => true,
+    'ytdlp_binary' => '/usr/local/bin/yt-dlp',
+    'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
+    'ytdlp_extra_args' => [],  // e.g. ['--cookies', '/path/to/cookies.txt']
+    'ytdlp_domains' => [
+        'youtube.com', 'youtu.be', 'vimeo.com',
+        'twitter.com', 'x.com', 'instagram.com',
+        'tiktok.com', 'reddit.com', 'twitch.tv',
+        'dailymotion.com',
+        // Add more domains as needed
+    ],
+```
+
+### Requirements (Native/Systemd)
+For non-Docker deployments, install yt-dlp and ffmpeg on the host:
+```bash
+# Debian/Ubuntu
+sudo apt install yt-dlp ffmpeg
+
+# Or via pip
+pip3 install yt-dlp
+sudo apt install ffmpeg
+```
+
+Docker images include yt-dlp and ffmpeg automatically.
+
 ## 📖 Usage
 
 1. **Send a magnet link** → Bot prompts for disk/category
 2. **Upload a `.torrent` file** → Same interactive selection
-3. **Check status**: Send `/status` to see active downloads
-4. **Completion**: Bot notifies when downloads finish
+3. **Send a video URL** (YouTube, Vimeo, etc.) → Same interactive selection, downloads via yt-dlp
+4. **Check status**: Send `/status` to see active downloads
+5. **Completion**: Bot notifies when downloads finish
 
 ## 🐛 Troubleshooting
 

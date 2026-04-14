@@ -21,7 +21,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.1.1';
+    public const VERSION = '1.2.0';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -35,6 +35,7 @@ final class QBittorrentBot
     private array $notifiedTorrHashes = [];
     private array $torrServerMsgIds = []; // hash => [['chat_id'=>int,'message_id'=>int], ...]
     private array $pendingDeletions = [];
+    private array $ytdlpProcesses = []; // ['pid'=>int,'chat_id'=>int,'url'=>string,'dir'=>string,'log_file'=>string,'started'=>int]
     private ?string $qbCookie = null;
 
     private int $offset = 0;
@@ -320,6 +321,12 @@ final class QBittorrentBot
             return;
         }
 
+        if (($this->config['ytdlp_enabled'] ?? false) && $this->isYtdlpUrl($text)) {
+            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx']];
+            $this->tgSendMessage($chatId, "🎬 Video URL detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
+            return;
+        }
+
         $this->processMedia($m, $chatId);
     }
 
@@ -524,6 +531,14 @@ final class QBittorrentBot
             } else {
                 $msgText = "❌ Failed to add magnet to qBit. Check bot.log for details.";
             }
+        } elseif ($p['type'] === 'ytdlp') {
+            $result = $this->startYtdlpDownload($p['url'], $dir, $chatId);
+            if ($result) {
+                $msgText = "⬇️ yt-dlp download started.\nURL: `" . $p['url'] . "`\nDir: `{$dir}`";
+                $success = true;
+            } else {
+                $msgText = "❌ Failed to start yt-dlp download. Check bot.log for details.";
+            }
         } else {
             $fileInfo = $this->tgApiRequest('getFile', ['file_id' => $p['file_id']]);
             if (!$fileInfo) {
@@ -562,6 +577,154 @@ final class QBittorrentBot
         if ($success && $res && isset($res['message_id'])) {
             $this->pendingDeletions[] = ['chat_id' => $chatId, 'message_id' => $res['message_id'], 'expires' => time() + $this->config['notification_cleanup_time']];
         }
+    }
+
+    private function isYtdlpUrl(string $text): bool
+    {
+        $text = trim($text);
+        if (empty($text)) {
+            return false;
+        }
+        // Must look like a URL
+        if (!preg_match('#^https?://#i', $text)) {
+            return false;
+        }
+        $host = parse_url($text, PHP_URL_HOST);
+        if (!$host) {
+            return false;
+        }
+        $host = strtolower($host);
+        $domains = $this->config['ytdlp_domains'] ?? ['youtube.com', 'youtu.be'];
+        foreach ($domains as $domain) {
+            $domain = strtolower($domain);
+            // Exact match or subdomain match (e.g. www.youtube.com matches youtube.com)
+            if ($host === $domain || str_ends_with($host, '.' . $domain)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private function startYtdlpDownload(string $url, string $dir, int $chatId): bool
+    {
+        $binary = $this->config['ytdlp_binary'] ?? '/usr/local/bin/yt-dlp';
+        if (!file_exists($binary) || !is_executable($binary)) {
+            $this->logger->error("yt-dlp binary not found or not executable: $binary");
+            return false;
+        }
+
+        // Defense-in-depth: re-validate URL
+        if (!$this->isYtdlpUrl($url)) {
+            $this->logger->error("startYtdlpDownload called with non-allowed URL: $url");
+            return false;
+        }
+
+        $format = $this->config['ytdlp_format'] ?? 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
+        $extraArgs = $this->config['ytdlp_extra_args'] ?? [];
+
+        // Build command
+        $cmd = escapeshellarg($binary)
+            . ' -f ' . escapeshellarg($format)
+            . ' -o ' . escapeshellarg($dir . '/%(title)s.%(ext)s')
+            . ' --no-playlist'
+            . ' --newline'
+            . ' --restrict-filenames';
+
+        foreach ($extraArgs as $arg) {
+            $cmd .= ' ' . escapeshellarg($arg);
+        }
+        $cmd .= ' ' . escapeshellarg($url);
+
+        // Log file for this download
+        $logDir = dirname($this->config['log_file'] ?? __DIR__ . '/data/bot.log');
+        $logFile = $logDir . '/ytdlp_' . time() . '_' . mt_rand(1000, 9999) . '.log';
+
+        // Fire background process
+        $fullCmd = $cmd . ' > ' . escapeshellarg($logFile) . ' 2>&1 & echo $!';
+        $this->logger->info("Starting yt-dlp: $cmd");
+
+        $pid = trim((string) shell_exec($fullCmd));
+        if (empty($pid) || !is_numeric($pid)) {
+            $this->logger->error("Failed to start yt-dlp process. shell_exec returned: $pid");
+            return false;
+        }
+
+        $pid = (int) $pid;
+        $this->logger->info("yt-dlp started with PID $pid, log: $logFile");
+
+        // Track for completion polling
+        $this->ytdlpProcesses[] = [
+            'pid' => $pid,
+            'chat_id' => $chatId,
+            'url' => $url,
+            'dir' => $dir,
+            'log_file' => $logFile,
+            'started' => time()
+        ];
+
+        return true;
+    }
+
+    private function checkYtdlpProcesses(): void
+    {
+        if (empty($this->ytdlpProcesses)) {
+            return;
+        }
+
+        foreach ($this->ytdlpProcesses as $k => $proc) {
+            // Check if process is still running via /proc/{pid}
+            if (file_exists("/proc/{$proc['pid']}")) {
+                continue; // Still running
+            }
+
+            $this->logger->info("yt-dlp process PID {$proc['pid']} finished.");
+
+            // Read the last lines of the log to determine success/failure
+            $logContent = '';
+            if (file_exists($proc['log_file'])) {
+                $logContent = (string) file_get_contents($proc['log_file']);
+            }
+
+            // yt-dlp prints "ERROR:" on failure. If no ERROR lines and log is non-empty, assume success.
+            $hasError = stripos($logContent, 'ERROR:') !== false;
+            $isEmpty = trim($logContent) === '';
+
+            if ($hasError || $isEmpty) {
+                $errorDetail = '';
+                if ($hasError) {
+                    // Extract last ERROR line
+                    $lines = explode("\n", trim($logContent));
+                    foreach (array_reverse($lines) as $line) {
+                        if (stripos($line, 'ERROR:') !== false) {
+                            $errorDetail = "\n" . trim($line);
+                            break;
+                        }
+                    }
+                }
+                $this->tgSendMessage(
+                    $proc['chat_id'],
+                    "❌ yt-dlp download failed.\nURL: `{$proc['url']}`$errorDetail",
+                    'Markdown'
+                );
+                $this->logger->error("yt-dlp PID {$proc['pid']} failed. Log: {$proc['log_file']}");
+            } else {
+                $res = $this->tgSendMessage(
+                    $proc['chat_id'],
+                    "✅ yt-dlp download finished.\nURL: `{$proc['url']}`\nDir: `{$proc['dir']}`",
+                    'Markdown'
+                );
+                if ($res && isset($res['message_id'])) {
+                    $this->pendingDeletions[] = ['chat_id' => $proc['chat_id'], 'message_id' => $res['message_id'], 'expires' => time() + $this->config['notification_cleanup_time']];
+                }
+                $this->logger->info("yt-dlp PID {$proc['pid']} completed successfully.");
+            }
+
+            // Clean up log file
+            @unlink($proc['log_file']);
+            unset($this->ytdlpProcesses[$k]);
+        }
+
+        $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
     }
 
     private function sendTorrentStatusToChat(int $chatId, bool $interactive): void
@@ -802,6 +965,7 @@ final class QBittorrentBot
                     $this->checkTorrServer();
                     $this->lastTorrCheck = $now;
                 }
+                $this->checkYtdlpProcesses();
                 if ($now - $this->lastSave >= $this->config['state_save_interval']) {
                     $this->saveState();
                     $this->lastSave = $now;

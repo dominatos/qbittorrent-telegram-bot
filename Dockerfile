@@ -1,9 +1,13 @@
 FROM php:8.2-cli-alpine
 
-# Install required PHP extensions
+# Install required PHP extensions and yt-dlp dependencies
 RUN apk add --no-cache \
     curl-dev \
-    && docker-php-ext-install curl
+    python3 \
+    py3-pip \
+    ffmpeg \
+    && docker-php-ext-install curl \
+    && pip3 install --break-system-packages yt-dlp
 
 # Set working directory
 WORKDIR /app

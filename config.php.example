@@ -42,7 +42,8 @@ return [
         'download-pc' => '📁 Other',
         'Music' => '🎵 Music',
         'photo' => '🖼 Photo',
-        'cartoni' => '🧸 Cartoni'
+        'cartoni' => '🧸 Cartoni',
+        'vidcontent' => '🎬 YouTube and others'
     ],
 
     // Timings (in seconds)
@@ -63,4 +64,31 @@ return [
     'torrserver_user' => '', // Add if auth is enabled
     'torrserver_pass' => '', // Add if auth is enabled
     'torrserver_dl_limit_mbit' => 100, // Download speed limit in Mbit/s for TorrServer downloads
+
+    // yt-dlp Settings
+    'ytdlp_enabled' => false,
+    'ytdlp_binary' => '/usr/local/bin/yt-dlp',   // Path to yt-dlp binary
+    'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', // yt-dlp format selection
+    'ytdlp_extra_args' => [],                      // Additional yt-dlp arguments, e.g. ['--cookies', '/path/to/cookies.txt']
+    // URL domain allowlist for yt-dlp detection
+    // Add or remove domains as needed. Must match the hostname part of the URL.
+    'ytdlp_domains' => [
+        'youtube.com',
+        'youtu.be',
+        'www.youtube.com',
+        'm.youtube.com',
+        'music.youtube.com',
+        'vimeo.com',
+        'twitter.com',
+        'x.com',
+        'instagram.com',
+        'tiktok.com',
+        'www.tiktok.com',
+        'reddit.com',
+        'www.reddit.com',
+        'twitch.tv',
+        'www.twitch.tv',
+        'dailymotion.com',
+        'www.dailymotion.com',
+    ],
 ];
