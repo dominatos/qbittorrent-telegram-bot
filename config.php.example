@@ -91,4 +91,9 @@ return [
         'dailymotion.com',
         'www.dailymotion.com',
     ],
+
+    // Jellyfin Settings (trigger library refresh after yt-dlp downloads)
+    'jellyfin_enabled' => false,
+    'jellyfin_url' => 'http://127.0.0.1:8096',
+    'jellyfin_api_key' => '',  // Get from Jellyfin Dashboard → API Keys
 ];

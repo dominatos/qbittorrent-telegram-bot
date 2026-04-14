@@ -21,7 +21,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.0';
+    public const VERSION = '1.2.1';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -717,6 +717,7 @@ final class QBittorrentBot
                     $this->pendingDeletions[] = ['chat_id' => $proc['chat_id'], 'message_id' => $res['message_id'], 'expires' => time() + $this->config['notification_cleanup_time']];
                 }
                 $this->logger->info("yt-dlp PID {$proc['pid']} completed successfully.");
+                $this->jellyfinRefreshLibrary();
             }
 
             // Clean up log file
@@ -725,6 +726,42 @@ final class QBittorrentBot
         }
 
         $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
+    }
+
+    private function jellyfinRefreshLibrary(): void
+    {
+        if (!($this->config['jellyfin_enabled'] ?? false)) {
+            return;
+        }
+
+        $url = rtrim($this->config['jellyfin_url'] ?? '', '/') . '/Library/Refresh';
+        $apiKey = $this->config['jellyfin_api_key'] ?? '';
+
+        if (empty($apiKey)) {
+            $this->logger->error("Jellyfin API key is not configured.");
+            return;
+        }
+
+        $this->logger->info("Triggering Jellyfin library refresh: $url");
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => '',
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => ['X-Emby-Token: ' . $apiKey],
+            CURLOPT_TIMEOUT => 10
+        ]);
+        $res = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err = curl_error($ch);
+        curl_close($ch);
+
+        if ($code === 204 || $code === 200) {
+            $this->logger->info("Jellyfin library refresh triggered successfully.");
+        } else {
+            $this->logger->error("Jellyfin library refresh failed. HTTP $code. Error: $err");
+        }
     }
 
     private function sendTorrentStatusToChat(int $chatId, bool $interactive): void
