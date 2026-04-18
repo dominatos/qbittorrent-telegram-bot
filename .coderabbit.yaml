@@ -15,14 +15,11 @@ reviews:
     - "!**/dist/**"
     - "!**/*.lock"
   path_instructions:
-    - path: "**/*.py"
+    - path: "**/*.php"
       instructions: |
         Focus on Telegram bot command safety, qBittorrent API error handling, input validation, access control, retries, and user-visible failure modes.
         Flag secret leakage, unsafe shelling out, and unbounded background work.
-    - path: "**/*.sh"
-      instructions: |
-        Review helper scripts for quoting, environment handling, and destructive filesystem/network commands.
-    - path: "**/*.{yml,yaml,json}"
+    - path: "**/*.{yml,yaml,json,*}"
       instructions: |
         Review config defaults, bot permissions, torrent path settings, and exposed credentials.
 
