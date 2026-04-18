@@ -183,6 +183,7 @@ The bot supports downloading videos from YouTube, Vimeo, Twitter/X, and many oth
 - **Same Workflow**: Uses the same disk/category selection menu as torrents
 - **Non-Blocking**: Downloads run in the background — the bot stays responsive
 - **Completion Notifications**: Automatic success/failure notifications when downloads finish
+- **Restart Persistence**: Active yt-dlp jobs survive bot restarts — processes are re-tracked and completion is reported
 - **Configurable Quality**: Set your preferred video format/quality
 - **Domain Allowlist**: Control which domains are accepted
 

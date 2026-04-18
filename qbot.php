@@ -21,7 +21,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.1';
+    public const VERSION = '1.2.2';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -89,6 +89,7 @@ final class QBittorrentBot
         };
 
         $this->loadState();
+        $this->reattachYtdlpProcesses();
         $this->lastStatus = time();
     }
 
@@ -114,6 +115,25 @@ final class QBittorrentBot
             foreach ($statusIds as $chatId => $ids) {
                 $this->lastStatusMessageIds[$chatId] = is_array($ids) ? $ids : [$ids];
             }
+
+            // Restore yt-dlp processes (backward-compatible: key may be absent)
+            $requiredYtdlpKeys = ['pid', 'chat_id', 'url', 'dir', 'log_file', 'started'];
+            foreach ($state['ytdlp_processes'] ?? [] as $proc) {
+                if (!is_array($proc)) {
+                    continue;
+                }
+                // Validate all required fields are present
+                $valid = true;
+                foreach ($requiredYtdlpKeys as $rk) {
+                    if (!array_key_exists($rk, $proc)) {
+                        $valid = false;
+                        break;
+                    }
+                }
+                if ($valid) {
+                    $this->ytdlpProcesses[] = $proc;
+                }
+            }
         }
 
         // Feature: Automatically add allowed users to known chats so they receive
@@ -134,6 +154,7 @@ final class QBittorrentBot
             'notified_torrents' => $this->notifiedTorrentIds,
             'notified_torr_hashes' => $this->notifiedTorrHashes,
             'last_status_ids' => $this->lastStatusMessageIds,
+            'ytdlp_processes' => $this->ytdlpProcesses,
             'timestamp' => time()
         ];
         $stateFile = $this->config['state_file'] ?? __DIR__ . '/data/bot_state.json';
@@ -726,6 +747,80 @@ final class QBittorrentBot
         }
 
         $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
+    }
+
+    private function reattachYtdlpProcesses(): void
+    {
+        if (empty($this->ytdlpProcesses)) {
+            return;
+        }
+
+        $this->logger->info("Reattaching " . count($this->ytdlpProcesses) . " restored yt-dlp process(es).");
+
+        $stillActive = [];
+        foreach ($this->ytdlpProcesses as $proc) {
+            $pid = (int) $proc['pid'];
+
+            if (file_exists("/proc/{$pid}")) {
+                // PID still running — keep tracking; checkYtdlpProcesses() handles the rest
+                $this->logger->info("yt-dlp PID $pid is still running. Resuming monitoring.");
+                $stillActive[] = $proc;
+                continue;
+            }
+
+            // PID is gone — process finished (or was killed) while bot was down
+            $this->logger->info("yt-dlp PID $pid is no longer running. Processing result.");
+
+            $logContent = '';
+            if (file_exists($proc['log_file'])) {
+                $logContent = (string) file_get_contents($proc['log_file']);
+            }
+
+            $hasError = stripos($logContent, 'ERROR:') !== false;
+            $isEmpty = trim($logContent) === '';
+
+            if ($hasError || $isEmpty) {
+                $errorDetail = '';
+                if ($hasError) {
+                    $lines = explode("\n", trim($logContent));
+                    foreach (array_reverse($lines) as $line) {
+                        if (stripos($line, 'ERROR:') !== false) {
+                            $errorDetail = "\n" . trim($line);
+                            break;
+                        }
+                    }
+                }
+                $this->tgSendMessage(
+                    (int) $proc['chat_id'],
+                    "❌ yt-dlp download failed (detected after restart).\nURL: `{$proc['url']}`$errorDetail",
+                    'Markdown'
+                );
+                $this->logger->error("yt-dlp PID $pid failed (post-restart). Log: {$proc['log_file']}");
+            } else {
+                $res = $this->tgSendMessage(
+                    (int) $proc['chat_id'],
+                    "✅ yt-dlp download finished (detected after restart).\nURL: `{$proc['url']}`\nDir: `{$proc['dir']}`",
+                    'Markdown'
+                );
+                if ($res && isset($res['message_id'])) {
+                    $this->pendingDeletions[] = [
+                        'chat_id' => (int) $proc['chat_id'],
+                        'message_id' => $res['message_id'],
+                        'expires' => time() + $this->config['notification_cleanup_time']
+                    ];
+                }
+                $this->logger->info("yt-dlp PID $pid completed successfully (post-restart).");
+                $this->jellyfinRefreshLibrary();
+            }
+
+            // Clean up log file
+            @unlink($proc['log_file']);
+        }
+
+        $this->ytdlpProcesses = $stillActive;
+
+        // Persist cleaned-up state immediately
+        $this->saveState();
     }
 
     private function jellyfinRefreshLibrary(): void
