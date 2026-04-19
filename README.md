@@ -218,6 +218,24 @@ sudo apt install ffmpeg
 
 Docker images include yt-dlp and ffmpeg automatically.
 
+<details>
+<summary><b>Fixing YouTube Bot Detection (Cookies)</b></summary>
+
+YouTube frequently blocks anonymous `yt-dlp` requests with a "Sign in to confirm you're not a bot" error. To bypass this, you need to provide your personal browser cookies.
+
+1. **Export your Cookies:** Use a browser extension like [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookiestxt-locally/ccpbcjhkecglkamamdfdlhenkndacbha) or [Export Cookies](https://addons.mozilla.org/en-US/firefox/addon/export-cookies-txt/) to export your YouTube cookies in Netscape format. Save it as `cookies.txt`.
+2. **Mount the File:** Place `cookies.txt` into the `data/` folder of your bot repository.
+3. **Update config.php:** Locate `'ytdlp_extra_args'` and add the `--cookies` argument:
+   ```php
+       'ytdlp_extra_args' => [
+           '--cookies',
+           __DIR__ . '/data/cookies.txt'
+       ],
+   ```
+4. **Restart the Bot:** Restart your bot/container to quickly apply the config update.
+
+</details>
+
 ## 📖 Usage
 
 1. **Send a magnet link** → Bot prompts for disk/category
