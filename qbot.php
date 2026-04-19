@@ -4,6 +4,8 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
+const QBOT_VERSION = '1.2.9';
+
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
 }
@@ -42,8 +44,6 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.8';
-
     // =================== CONFIGURATION ===================
     private array $config;
 
@@ -1637,7 +1637,7 @@ final class QBittorrentBot
      */
     public function run(): void
     {
-        $this->logger->info("Bot v" . self::VERSION . " started.");
+        $this->logger->info("Bot v" . QBOT_VERSION . " started.");
         while (true) {
             try {
                 $updates = $this->tgApiRequest('getUpdates', ['offset' => $this->offset + 1, 'timeout' => $this->config['poll_timeout']]);
@@ -1686,7 +1686,7 @@ final class QBittorrentBot
 
 $opts = getopt('v', ['version']);
 if (isset($opts['v']) || isset($opts['version'])) {
-    echo "QBittorrent Telegram Bot v" . QBittorrentBot::VERSION . "\n";
+    echo "QBittorrent Telegram Bot v" . QBOT_VERSION . "\n";
     exit(0);
 }
 
