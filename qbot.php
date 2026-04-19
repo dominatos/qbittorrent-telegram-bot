@@ -266,7 +266,7 @@ final class QBittorrentBot
         return false;
     }
 
-    private function qbRequest(string $endpoint, array $params = [], bool $isPost = false, bool $isFile = false)
+    private function qbRequest(string $endpoint, array $params = [], bool $isPost = false, bool $isFile = false, bool $hasRetried = false)
     {
         if (!$this->qbCookie && !$this->qbLogin()) {
             $this->logger->error("qbRequest failed: No login cookie.");
@@ -295,9 +295,13 @@ final class QBittorrentBot
         curl_close($ch);
 
         if ($code === 403) {
-            $this->logger->info("qbRequest got 403, re-logging in...");
-            $this->qbCookie = null;
-            return $this->qbRequest($endpoint, $params, $isPost, $isFile);
+            if (!$hasRetried) {
+                $this->logger->info("qbRequest got 403, re-logging in...");
+                $this->qbCookie = null;
+                return $this->qbRequest($endpoint, $params, $isPost, $isFile, true);
+            }
+            $this->logger->error("qbRequest got 403 again after re-login. Aborting.");
+            return null;
         }
 
         if ($res === false) {
@@ -337,13 +341,13 @@ final class QBittorrentBot
         }
 
         if (stripos($text, 'magnet:?') === 0) {
-            $this->pendingDownloads[$chatId] = ['type' => 'magnet', 'magnet' => $text, 'disk_idx' => $this->config['default_disk_idx']];
+            $this->pendingDownloads[$chatId] = ['type' => 'magnet', 'magnet' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
             $this->tgSendMessage($chatId, "🔗 Magnet detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
             return;
         }
 
         if (($this->config['ytdlp_enabled'] ?? false) && $this->isYtdlpUrl($text)) {
-            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx']];
+            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
             $this->tgSendMessage($chatId, "🎬 Video URL detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
             return;
         }
@@ -380,7 +384,7 @@ final class QBittorrentBot
                 $this->tgSendMessage($chatId, "⚠️ *File too large* (" . round($size / 1024 / 1024, 1) . "MB).\nBot API limit is *20MB*.", 'Markdown');
                 return;
             }
-            $this->pendingDownloads[$chatId] = ['type' => $type, 'file_id' => $fileId, 'name' => $name, 'disk_idx' => $this->config['default_disk_idx']];
+            $this->pendingDownloads[$chatId] = ['type' => $type, 'file_id' => $fileId, 'name' => $name, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
             $this->tgSendMessage($chatId, "📥 Received: `{$name}`\nChoose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
         }
     }
@@ -391,10 +395,34 @@ final class QBittorrentBot
         $data = $cb['data'];
         $this->logger->info("Received callback data: $data from chat: $chatId");
 
+        // Verify authorization for dl / set_disk
+        if (str_starts_with($data, 'set_disk:') || str_starts_with($data, 'dl:')) {
+            if (!isset($this->pendingDownloads[$chatId])) {
+                $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "No pending download or session expired.", 'show_alert' => true]);
+                return;
+            }
+            if ($this->pendingDownloads[$chatId]['user_id'] !== $cb['from']['id']) {
+                $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Not authorized. This isn't your download.", 'show_alert' => true]);
+                return;
+            }
+        }
+
+        // Validate ts_dl and ts_ignore freshness
+        if (str_starts_with($data, 'ts_dl:') || str_starts_with($data, 'ts_ignore:')) {
+            $hash = str_starts_with($data, 'ts_dl:') ? substr($data, 6) : substr($data, 10);
+            if (!isset($this->torrServerMsgIds[$hash]) && in_array($hash, $this->notifiedTorrHashes)) {
+                $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "This TorrServer item was already processed.", 'show_alert' => true]);
+                return;
+            }
+        }
+
         $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id']]);
 
         if (str_starts_with($data, 'set_disk:')) {
             $idx = (int) substr($data, 9);
+            if (!isset($this->config['disks'][$idx])) {
+                return;
+            }
             $this->pendingDownloads[$chatId]['disk_idx'] = $idx;
 
             // If the original message is a photo, we can only edit its caption and markup using editMessageCaption
@@ -1035,6 +1063,7 @@ final class QBittorrentBot
             ];
 
             $this->logger->info("Sending message to known chats. Count: " . count($this->knownChatIds));
+            $delivered = false;
             foreach ($this->knownChatIds as $cid) {
                 $res = null;
                 if (!empty($poster)) {
@@ -1054,12 +1083,17 @@ final class QBittorrentBot
 
                 if ($res && isset($res['message_id'])) {
                     $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
+                    $delivered = true;
                 }
             }
 
-            $this->notifiedTorrHashes[] = $hash;
-            $this->saveState();
-            $this->logger->info("Saved state for hash $hash");
+            if ($delivered) {
+                $this->notifiedTorrHashes[] = $hash;
+                $this->saveState();
+                $this->logger->info("Saved state for hash $hash");
+            } else {
+                $this->logger->error("Skipped saving hash $hash as all notifications failed.");
+            }
         }
     }
 

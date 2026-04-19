@@ -66,8 +66,12 @@ return [
     'torrserver_dl_limit_mbit' => 100, // Download speed limit in Mbit/s for TorrServer downloads
 
     // yt-dlp Settings
+    // Ensure 'ytdlp_enabled' is true to use this feature.
+    // By default, 'ytdlp_binary' relies on the system PATH. If yt-dlp is installed elsewhere
+    // (e.g., ~/.local/bin/yt-dlp or /usr/local/bin/yt-dlp), provide the absolute path.
+    // Additional parameters can be passed using 'ytdlp_extra_args'.
     'ytdlp_enabled' => false,
-    'ytdlp_binary' => '/usr/local/bin/yt-dlp',   // Path to yt-dlp binary
+    'ytdlp_binary' => 'yt-dlp',
     'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', // yt-dlp format selection
     'ytdlp_extra_args' => [],                      // Additional yt-dlp arguments, e.g. ['--cookies', '/path/to/cookies.txt']
     // URL domain allowlist for yt-dlp detection
