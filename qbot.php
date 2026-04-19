@@ -894,7 +894,8 @@ final class QBittorrentBot
                 }
                 @unlink($local);
             } else {
-                if (@rename($local, $dir . '/' . basename($local))) {
+                $dest = $dir . '/' . basename($local);
+                if (@rename($local, $dest) || (@copy($local, $dest) && @unlink($local))) {
                     $msgText = "✅ Media saved to `{$dir}`";
                     $success = true;
                 } else {
