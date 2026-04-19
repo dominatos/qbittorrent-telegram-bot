@@ -74,6 +74,7 @@ return [
     // (e.g., ~/.local/bin/yt-dlp or /usr/local/bin/yt-dlp), provide the absolute path.
     // Additional parameters can be passed using 'ytdlp_extra_args'.
     'ytdlp_enabled' => false,
+    'ytdlp_max_concurrent' => 2, // Maximum concurrent yt-dlp downloads (0 = unlimited)
     'ytdlp_binary' => 'yt-dlp',
     'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', // yt-dlp format selection
     // Additional yt-dlp arguments. For YouTube, cookies and JS challenge solvers are highly recommended:

@@ -42,7 +42,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.6';
+    public const VERSION = '1.2.7';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -57,6 +57,7 @@ final class QBittorrentBot
     private array $torrServerMsgIds = []; // hash => [['chat_id'=>int,'message_id'=>int], ...]
     private array $pendingDeletions = [];
     private array $ytdlpProcesses = []; // ['pid'=>int,'chat_id'=>int,'url'=>string,'dir'=>string,'log_file'=>string,'started'=>int]
+    private array $ytdlpQueue = []; // ['url'=>string,'dir'=>string,'chat_id'=>int,'queued'=>int]
     private ?string $qbCookie = null;
     private array $pendingTorrents = []; // ['hash' => ['attempts' => 0, 'first_seen' => timestamp]]
 
@@ -185,6 +186,7 @@ final class QBittorrentBot
             }
 
             // Restore yt-dlp processes (backward-compatible: key may be absent)
+            $this->ytdlpQueue = $state['ytdlp_queue'] ?? [];
             $requiredYtdlpKeys = ['pid', 'chat_id', 'url', 'dir', 'log_file', 'started'];
             foreach ($state['ytdlp_processes'] ?? [] as $proc) {
                 if (!is_array($proc)) {
@@ -232,6 +234,7 @@ final class QBittorrentBot
             'torrServerMsgIds' => $this->torrServerMsgIds,
             'last_status_ids' => $this->lastStatusMessageIds,
             'ytdlp_processes' => $this->ytdlpProcesses,
+            'ytdlp_queue' => $this->ytdlpQueue,
             'timestamp' => time()
         ];
         $stateFile = $this->config['state_file'] ?? __DIR__ . '/data/bot_state.json';
@@ -835,7 +838,10 @@ final class QBittorrentBot
             }
         } elseif ($p['type'] === 'ytdlp') {
             $result = $this->startYtdlpDownload($p['url'], $dir, $chatId);
-            if ($result) {
+            if ($result === 'queued') {
+                $msgText = "⏳ yt-dlp download queued.\nURL: `" . $p['url'] . "`\nDir: `{$dir}`";
+                $success = true;
+            } elseif ($result === true) {
                 $msgText = "⬇️ yt-dlp download started.\nURL: `" . $p['url'] . "`\nDir: `{$dir}`";
                 $success = true;
             } else {
@@ -934,10 +940,23 @@ final class QBittorrentBot
      * @param string $url The yt-dlp-allowed URL to download.
      * @param string $dir Destination directory where yt-dlp will write files.
      * @param int $chatId Telegram chat ID to attribute the job to for notifications.
-     * @return bool `true` if the yt-dlp process was started and tracked successfully, `false` otherwise.
+     * @return bool|string `true` if the yt-dlp process was started, `'queued'` if enqueued, `false` otherwise.
      */
-    private function startYtdlpDownload(string $url, string $dir, int $chatId): bool
+    private function startYtdlpDownload(string $url, string $dir, int $chatId): bool|string
     {
+        $max = $this->config['ytdlp_max_concurrent'] ?? 0;
+        if ($max > 0 && count($this->ytdlpProcesses) >= $max) {
+            $this->logger->info("Concurrency limit reached ($max). Queuing yt-dlp job: $url");
+            $this->ytdlpQueue[] = [
+                'chat_id' => $chatId,
+                'url' => $url,
+                'dir' => $dir,
+                'queued' => time()
+            ];
+            $this->saveState(); // Persist queue
+            return 'queued';
+        }
+
         $binary = $this->config['ytdlp_binary'] ?? 'yt-dlp';
         if (strpos($binary, DIRECTORY_SEPARATOR) === false) {
             $resolved = shell_exec("command -v " . escapeshellarg($binary));
@@ -1027,7 +1046,7 @@ final class QBittorrentBot
             // Check if process is still running via /proc/{pid} and verify identity to prevent PID recycle matches
             $isRunning = false;
             if (file_exists("/proc/{$proc['pid']}")) {
-                $cmdline = (string)@file_get_contents("/proc/{$proc['pid']}/cmdline");
+                $cmdline = (string) @file_get_contents("/proc/{$proc['pid']}/cmdline");
                 if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
                     $isRunning = true;
                 }
@@ -1087,6 +1106,25 @@ final class QBittorrentBot
             $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
             $this->saveState(); // Flush pruned jobs dynamically to prevent polling ghosts.
         }
+
+        // Drain queue if concurrency limit allows
+        $max = $this->config['ytdlp_max_concurrent'] ?? 0;
+        if ($max > 0 && !empty($this->ytdlpQueue)) {
+            $queueShifted = false;
+            while (!empty($this->ytdlpQueue) && count($this->ytdlpProcesses) < $max) {
+                $next = array_shift($this->ytdlpQueue);
+                $queueShifted = true;
+                $res = $this->startYtdlpDownload($next['url'], $next['dir'], $next['chat_id']);
+                if ($res === true) {
+                    $this->tgSendMessage($next['chat_id'], "⬇️ Dequeued and started yt-dlp download.\nURL: `" . $next['url'] . "`\nDir: `{$next['dir']}`", 'Markdown');
+                } else {
+                    $this->tgSendMessage($next['chat_id'], "❌ Failed to start dequeued yt-dlp download.\nURL: `" . $next['url'] . "`", 'Markdown');
+                }
+            }
+            if ($queueShifted) {
+                $this->saveState();
+            }
+        }
     }
 
     /**
@@ -1112,7 +1150,7 @@ final class QBittorrentBot
             // Validate both PID existence and process identity to prevent PID recycle matches
             $isRunning = false;
             if (file_exists("/proc/{$pid}")) {
-                $cmdline = (string)@file_get_contents("/proc/{$pid}/cmdline");
+                $cmdline = (string) @file_get_contents("/proc/{$pid}/cmdline");
                 if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
                     $isRunning = true;
                 }
