@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.10';
+const QBOT_VERSION = '1.2.11';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -1513,7 +1513,7 @@ final class QBittorrentBot
 
             $poster = $t['poster'] ?? '';
             $fileInfoStr = "";
-            $totalSize = $t['torrent_size'] ?? 0;
+            $totalSize = $t['torrent_size'] ?? $t['size'] ?? $t['length'] ?? 0;
 
             if (!empty($t['data'])) {
                 $parsedData = json_decode($t['data'], true);
