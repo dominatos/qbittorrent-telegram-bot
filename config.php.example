@@ -76,7 +76,11 @@ return [
     'ytdlp_enabled' => false,
     'ytdlp_binary' => 'yt-dlp',
     'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', // yt-dlp format selection
-    'ytdlp_extra_args' => [],                      // Additional yt-dlp arguments, e.g. ['--cookies', '/path/to/cookies.txt']
+    // Additional yt-dlp arguments. For YouTube, cookies and JS challenge solvers are highly recommended:
+    'ytdlp_extra_args' => [
+        // '--cookies', __DIR__ . '/data/cookies.txt',
+        // '--remote-components', 'ejs:github'
+    ],
     // URL domain allowlist for yt-dlp detection
     // Add or remove domains as needed. Must match the hostname part of the URL.
     'ytdlp_domains' => [
