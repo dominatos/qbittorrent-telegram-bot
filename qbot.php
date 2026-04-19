@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.13';
+const QBOT_VERSION = '1.2.14';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -122,7 +122,10 @@ final class QBittorrentBot
              */
             public function error(string $msg): void
             {
-                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] ERROR: $msg\n", FILE_APPEND);
+                $out = "[" . date('Y-m-d H:i:s') . "] ERROR: $msg\n";
+                if (file_put_contents($this->logFile, $out, FILE_APPEND) === false) {
+                    error_log("Failed to write to log file {$this->logFile}. Original message: $msg");
+                }
                 echo "ERROR: $msg\n";
             }
             /**
@@ -132,7 +135,10 @@ final class QBittorrentBot
              */
             public function info(string $msg): void
             {
-                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] INFO: $msg\n", FILE_APPEND);
+                $out = "[" . date('Y-m-d H:i:s') . "] INFO: $msg\n";
+                if (file_put_contents($this->logFile, $out, FILE_APPEND) === false) {
+                    error_log("Failed to write to log file {$this->logFile}. Original message: $msg");
+                }
                 echo "INFO: $msg\n";
             }
             /**
@@ -142,7 +148,10 @@ final class QBittorrentBot
              */
             public function warning(string $msg): void
             {
-                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] WARN: $msg\n", FILE_APPEND);
+                $out = "[" . date('Y-m-d H:i:s') . "] WARN: $msg\n";
+                if (file_put_contents($this->logFile, $out, FILE_APPEND) === false) {
+                    error_log("Failed to write to log file {$this->logFile}. Original message: $msg");
+                }
                 echo "WARN: $msg\n";
             }
         };
@@ -1346,7 +1355,7 @@ final class QBittorrentBot
             CURLOPT_HTTPHEADER => ['X-Emby-Token: ' . $apiKey],
             CURLOPT_TIMEOUT => 10
         ]);
-        $res = curl_exec($ch);
+        curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
         curl_close($ch);
