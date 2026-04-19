@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.9';
+const QBOT_VERSION = '1.2.10';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -86,6 +86,11 @@ final class QBittorrentBot
         $requiredKeys = ['bot_token', 'allowed_user_ids', 'disks', 'qb_url', 'categories']; // 'dirs' was renamed to 'categories' in example, need to match
         // Let's stick to 'categories' as used in example, but legacy code used DIRS. 
         // I should use 'categories' in config and code.
+        foreach ($requiredKeys as $key) {
+            if (!isset($this->config[$key])) {
+                die("Error: Missing required config key: '$key'. Check config.php.\n");
+            }
+        }
 
         $this->apiBase = [
             'api' => 'https://api.telegram.org/bot' . $this->config['bot_token'] . '/',
@@ -242,7 +247,11 @@ final class QBittorrentBot
         if (!is_dir($stateDir)) {
             @mkdir($stateDir, 0775, true);
         }
-        if (file_put_contents($stateFile, json_encode($state)) === false) {
+        $tmp = $stateFile . '.tmp.' . getmypid();
+        if (file_put_contents($tmp, json_encode($state)) !== false) {
+            rename($tmp, $stateFile);
+        } else {
+            @unlink($tmp);
             $this->logger->error("saveState failed to write state to $stateFile");
         }
     }
@@ -733,14 +742,14 @@ final class QBittorrentBot
         if (!empty($target['magnet'])) {
             $magnet = $target['magnet'];
         } else {
-            $hash = preg_replace('/[^a-fA-F0-9]/', '', $target['hash']);
-            if (strlen($hash) !== 40 && strlen($hash) !== 32) {
+            $sanitizedHash = preg_replace('/[^a-fA-F0-9]/', '', $target['hash']);
+            if (strlen($sanitizedHash) !== 40 && strlen($sanitizedHash) !== 32) {
                 $this->logger->error("Invalid torrent hash: {$target['hash']}");
                 $this->tgSendMessage($chatId, "❌ Invalid torrent hash format.");
                 return;
             }
             $title = urlencode($target['title'] ?? 'Unknown');
-            $magnet = "magnet:?xt=urn:btih:{$hash}&dn={$title}";
+            $magnet = "magnet:?xt=urn:btih:{$sanitizedHash}&dn={$title}";
         }
         $this->logger->info("Generated/Found magnet: $magnet");
 
