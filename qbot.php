@@ -477,7 +477,7 @@ final class QBittorrentBot
         } elseif (str_starts_with($data, 'ts_dl:')) {
             $hash = substr($data, 6);
             $this->logger->info("ts_dl requested for hash: $hash");
-            $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id']);
+            $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id'], $cb['from']['id']);
             $this->deleteOtherTorrServerMessages($hash, $chatId);
         } elseif (str_starts_with($data, 'ts_ignore:')) {
             $hash = substr($data, 10);
@@ -490,7 +490,7 @@ final class QBittorrentBot
         }
     }
 
-    private function handleTorrServerDownload(int $chatId, string $hash, array $message, int $messageId): void
+    private function handleTorrServerDownload(int $chatId, string $hash, array $message, int $messageId, int $userId): void
     {
         $this->logger->info("handleTorrServerDownload started for $hash");
         $res = $this->torrServerRequest('/torrents', ['action' => 'list']);
@@ -534,6 +534,7 @@ final class QBittorrentBot
             'magnet' => $magnet,
             'disk_idx' => $this->config['default_disk_idx'],
             'source' => 'torrserver',
+            'user_id' => $userId,
             'expires' => time() + 600
         ];
 
