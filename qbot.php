@@ -106,7 +106,13 @@ final class QBittorrentBot
                 return;
             }
         }
-        $state = json_decode(file_get_contents($stateFile), true);
+        $raw = @file_get_contents($stateFile);
+        if ($raw === false) {
+            $error = error_get_last();
+            $this->logger->error("Failed to read state file: $stateFile. Error: " . ($error['message'] ?? 'Unknown'));
+            return;
+        }
+        $state = json_decode($raw, true);
         if (is_array($state)) {
             $this->knownChatIds = $state['known_chats'] ?? [];
             $this->notifiedTorrentIds = $state['notified_torrents'] ?? [];
