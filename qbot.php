@@ -15,13 +15,26 @@ ini_set('memory_limit', '256M');
 
 interface LoggerInterface
 {
+    /**
+     * Logs an error message.
+     *
+     * @param string $msg The error message to log.
+     * @return void
+     */
     public function error(string $msg): void;
+
+    /**
+     * Logs an informational message.
+     *
+     * @param string $msg The informational message to log.
+     * @return void
+     */
     public function info(string $msg): void;
 }
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.4';
+    public const VERSION = '1.2.5';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -1256,7 +1269,7 @@ final class QBittorrentBot
             if (in_array($t['hash'], $this->notifiedTorrentIds))
                 continue;
 
-            $action = strtolower(trim((string)($this->config['action_on_complete'] ?? 'stop')));
+            $action = strtolower(trim((string) ($this->config['action_on_complete'] ?? 'stop')));
             if (in_array($action, ['remove_data', 'delete_data'])) {
                 $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'true'], true);
             } elseif (in_array($action, ['remove', 'delete'])) {
@@ -1274,15 +1287,15 @@ final class QBittorrentBot
     }
 
     /**
-         * Perform a request to the configured TorrServer endpoint and decode its JSON response.
-         *
-         * When $data is empty a GET is performed; when $data is provided a JSON POST is sent.
-         * If TorrServer credentials are configured, HTTP Basic authentication will be used.
-         *
-         * @param string $endpoint Path appended to the configured TorrServer base URL (e.g. '/torrents').
-         * @param array $data Optional payload sent as JSON in a POST request when non-empty.
-         * @return array|null Decoded response as an associative array, or `null` if the response is empty or not valid JSON.
-         */
+     * Perform a request to the configured TorrServer endpoint and decode its JSON response.
+     *
+     * When $data is empty a GET is performed; when $data is provided a JSON POST is sent.
+     * If TorrServer credentials are configured, HTTP Basic authentication will be used.
+     *
+     * @param string $endpoint Path appended to the configured TorrServer base URL (e.g. '/torrents').
+     * @param array $data Optional payload sent as JSON in a POST request when non-empty.
+     * @return array|null Decoded response as an associative array, or `null` if the response is empty or not valid JSON.
+     */
     private function torrServerRequest(string $endpoint, array $data = []): mixed
     {
         $url = rtrim($this->config['torrserver_url'], '/') . $endpoint;
@@ -1361,8 +1374,10 @@ final class QBittorrentBot
                 } else {
                     $this->pendingTorrents[$hash]['attempts']++;
                     // If metadata doesn't load within 10 attempts or 10 minutes - give up and mark as notified
-                    if ($this->pendingTorrents[$hash]['attempts'] > 10 || 
-                        (time() - $this->pendingTorrents[$hash]['first_seen']) > 600) {
+                    if (
+                        $this->pendingTorrents[$hash]['attempts'] > 10 ||
+                        (time() - $this->pendingTorrents[$hash]['first_seen']) > 600
+                    ) {
                         $this->notifiedTorrHashes[] = $hash;
                         $this->saveState();
                         unset($this->pendingTorrents[$hash]);
@@ -1426,7 +1441,7 @@ final class QBittorrentBot
                         $res = null;
                     }
                 }
-                
+
                 if (empty($poster) || !$res) {
                     $res = $this->tgSendMessage($cid, $msg, 'Markdown', $keyboard);
                     if (!$res || !isset($res['message_id'])) {
