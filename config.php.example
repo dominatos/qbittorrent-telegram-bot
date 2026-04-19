@@ -30,7 +30,10 @@ return [
     'qb_user' => 'admin',
     'qb_pass' => 'xxxxxxx',
     
-    // Action on torrent completion: 'stop', 'pause', 'remove'
+    // Action on torrent completion: 
+    // 'stop' or 'pause' => Pauses the torrent (leaves it in qBittorrent list)
+    // 'remove' => Removes torrent from qBittorrent but keeps downloaded files
+    // 'remove_data' => Removes torrent AND deletes downloaded files
     'action_on_complete' => 'stop',
 
     // Download categories/subdirectories

@@ -21,7 +21,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.2';
+    public const VERSION = '1.2.4';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -37,6 +37,7 @@ final class QBittorrentBot
     private array $pendingDeletions = [];
     private array $ytdlpProcesses = []; // ['pid'=>int,'chat_id'=>int,'url'=>string,'dir'=>string,'log_file'=>string,'started'=>int]
     private ?string $qbCookie = null;
+    private array $pendingTorrents = []; // ['hash' => ['attempts' => 0, 'first_seen' => timestamp]]
 
     private int $offset = 0;
     private int $lastCheck = 0;
@@ -341,13 +342,13 @@ final class QBittorrentBot
         }
 
         if (stripos($text, 'magnet:?') === 0) {
-            $this->pendingDownloads[$chatId] = ['type' => 'magnet', 'magnet' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
+            $this->pendingDownloads[$chatId] = ['type' => 'magnet', 'magnet' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
             $this->tgSendMessage($chatId, "🔗 Magnet detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
             return;
         }
 
         if (($this->config['ytdlp_enabled'] ?? false) && $this->isYtdlpUrl($text)) {
-            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
+            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
             $this->tgSendMessage($chatId, "🎬 Video URL detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
             return;
         }
@@ -384,7 +385,7 @@ final class QBittorrentBot
                 $this->tgSendMessage($chatId, "⚠️ *File too large* (" . round($size / 1024 / 1024, 1) . "MB).\nBot API limit is *20MB*.", 'Markdown');
                 return;
             }
-            $this->pendingDownloads[$chatId] = ['type' => $type, 'file_id' => $fileId, 'name' => $name, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id']];
+            $this->pendingDownloads[$chatId] = ['type' => $type, 'file_id' => $fileId, 'name' => $name, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
             $this->tgSendMessage($chatId, "📥 Received: `{$name}`\nChoose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
         }
     }
@@ -401,7 +402,7 @@ final class QBittorrentBot
                 $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "No pending download or session expired.", 'show_alert' => true]);
                 return;
             }
-            if ($this->pendingDownloads[$chatId]['user_id'] !== $cb['from']['id']) {
+            if (($this->pendingDownloads[$chatId]['user_id'] ?? $cb['from']['id']) !== $cb['from']['id']) {
                 $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Not authorized. This isn't your download.", 'show_alert' => true]);
                 return;
             }
@@ -444,7 +445,9 @@ final class QBittorrentBot
             $this->logger->info("set_disk updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
-            $path = $this->config['disks'][$this->pendingDownloads[$chatId]['disk_idx'] ?? 0] . '/' . $sub;
+            $sub = str_replace(['..', '/', '\\'], '', $sub);
+            $diskPath = rtrim($this->config['disks'][$this->pendingDownloads[$chatId]['disk_idx'] ?? 0], '/');
+            $path = $diskPath . '/' . $sub;
             $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
             $this->finalizeDownload($chatId, $path);
         } elseif (str_starts_with($data, 'ts_dl:')) {
@@ -506,7 +509,8 @@ final class QBittorrentBot
             'type' => 'magnet',
             'magnet' => $magnet,
             'disk_idx' => $this->config['default_disk_idx'],
-            'source' => 'torrserver'
+            'source' => 'torrserver',
+            'expires' => time() + 600
         ];
 
         // If the original message was a photo, we must use editMessageCaption.
@@ -568,11 +572,18 @@ final class QBittorrentBot
 
                 // qBittorrent often ignores dlLimit when adding magnets. Enforce it directly:
                 if ($limitBytesPerSec > 0 && preg_match('/urn:btih:([a-zA-Z0-9]+)/i', $p['magnet'], $m)) {
-                    $hash = $m[1];
-                    // Even if metadata is not downloaded, the torrent is registered immediately by hash
-                    $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitBytesPerSec], true);
-                    $this->logger->info("Applied manual download limit $limitBytesPerSec to $hash");
-                    $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s";
+                    $hash = strtolower($m[1]);
+                    sleep(2); // Wait for qBittorrent to catch up
+                    for ($i = 0; $i < 3; $i++) {
+                        $info = $this->qbRequest('/api/v2/torrents/info', ['hashes' => $hash]);
+                        if (is_array($info) && count($info) > 0) {
+                            $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitBytesPerSec], true);
+                            $this->logger->info("Applied manual download limit $limitBytesPerSec to $hash");
+                            $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s";
+                            break;
+                        }
+                        sleep(1);
+                    }
                 }
 
                 $msgText = "✅ Magnet added to qBit.\nDir: `{$dir}`$limitInfo";
@@ -594,6 +605,8 @@ final class QBittorrentBot
                 $this->tgSendMessage($chatId, "❌ Could not get file from Telegram (Check 20MB limit).");
                 return;
             }
+
+            $this->tgSendMessage($chatId, "📥 Downloading file...", 'Markdown');
 
             $local = __DIR__ . '/' . preg_replace('/[^a-zA-Z0-9\._\-]/', '_', $p['name']);
             $fp = fopen($local, 'w+');
@@ -950,7 +963,16 @@ final class QBittorrentBot
         foreach ($torrents as $t) {
             if (in_array($t['hash'], $this->notifiedTorrentIds))
                 continue;
-            $this->qbRequest('/api/v2/torrents/' . ($this->config['action_on_complete'] === 'remove' ? 'delete' : 'pause'), ['hashes' => $t['hash']], true);
+
+            $action = strtolower(trim((string)($this->config['action_on_complete'] ?? 'stop')));
+            if (in_array($action, ['remove_data', 'delete_data'])) {
+                $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'true'], true);
+            } elseif (in_array($action, ['remove', 'delete'])) {
+                $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash']], true);
+            } else {
+                $this->qbRequest('/api/v2/torrents/pause', ['hashes' => $t['hash']], true);
+            }
+
             foreach ($this->knownChatIds as $cid) {
                 $this->tgSendMessage($cid, "✅ *Finished:* `{$t['name']}`", 'Markdown');
             }
@@ -1018,9 +1040,22 @@ final class QBittorrentBot
             $name = $t['title'] ?? '';
             // If TorrServer hasn't finished loading the torrent, title might be empty or "Unknown"
             if (empty($name) || $name === 'Unknown') {
-                $this->logger->info("Skipping notification for hash $hash: Title not ready yet.");
+                if (!isset($this->pendingTorrents[$hash])) {
+                    $this->pendingTorrents[$hash] = ['attempts' => 1, 'first_seen' => time()];
+                } else {
+                    $this->pendingTorrents[$hash]['attempts']++;
+                    // If metadata doesn't load within 10 attempts or 10 minutes - give up and mark as notified
+                    if ($this->pendingTorrents[$hash]['attempts'] > 10 || 
+                        (time() - $this->pendingTorrents[$hash]['first_seen']) > 600) {
+                        $this->notifiedTorrHashes[] = $hash;
+                        $this->saveState();
+                        unset($this->pendingTorrents[$hash]);
+                    }
+                }
                 continue;
             }
+            // Clean up from pending if successfully processed
+            unset($this->pendingTorrents[$hash]);
 
             $this->logger->info("Processing new torrent $hash ($name)");
 
@@ -1066,7 +1101,7 @@ final class QBittorrentBot
             $delivered = false;
             foreach ($this->knownChatIds as $cid) {
                 $res = null;
-                if (!empty($poster)) {
+                if (!empty($poster) && filter_var($poster, FILTER_VALIDATE_URL)) {
                     $res = $this->tgSendPhoto($cid, $poster, $msg, 'Markdown', $keyboard);
                     if (!$res || !isset($res['message_id'])) {
                         $this->logger->error("Failed to send photo to $cid, falling back to text.");
@@ -1144,6 +1179,13 @@ final class QBittorrentBot
                     if ($now >= $i['expires']) {
                         $this->tgApiRequest('deleteMessage', ['chat_id' => $i['chat_id'], 'message_id' => $i['message_id']]);
                         unset($this->pendingDeletions[$k]);
+                    }
+                }
+                foreach ($this->pendingDownloads as $cid => $pending) {
+                    $expires = $pending['expires'] ?? 0;
+                    if ($expires > 0 && $now >= $expires) {
+                        $this->tgSendMessage($cid, "⏱ Download request expired. Please try again.");
+                        unset($this->pendingDownloads[$cid]);
                     }
                 }
             } catch (Throwable $e) {

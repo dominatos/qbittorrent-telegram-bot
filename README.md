@@ -129,6 +129,7 @@ return [
     ],
     'status_show_limit' => 10,      // Max torrents in /status (0 = unlimited)
     'status_filter' => 'all',       // 'all' or 'downloading'
+    'action_on_complete' => 'stop', // 'stop', 'remove', or 'remove_data'
 ];
 ```
 
