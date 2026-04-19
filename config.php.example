@@ -13,10 +13,10 @@ return [
     ],
 
     // File to store bot state (relative to script or absolute path)
-    'state_file' => __DIR__ . '/bot_state.json',
+    'state_file' => __DIR__ . '/data/bot_state.json',
 
     // Log file path
-    'log_file' => __DIR__ . '/bot.log',
+    'log_file' => __DIR__ . '/data/bot.log',
 
     // Mount points or disk paths
     'disks' => [

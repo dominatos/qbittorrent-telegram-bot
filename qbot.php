@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.11';
+const QBOT_VERSION = '1.2.12';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -190,6 +190,11 @@ final class QBittorrentBot
                 $this->lastStatusMessageIds[$chatId] = is_array($ids) ? $ids : [$ids];
             }
 
+            $this->pendingLimits = $state['pendingLimits'] ?? [];
+            if (!is_array($this->pendingLimits)) {
+                $this->pendingLimits = [];
+            }
+
             // Restore yt-dlp processes (backward-compatible: key may be absent)
             $this->ytdlpQueue = $state['ytdlp_queue'] ?? [];
             $requiredYtdlpKeys = ['pid', 'chat_id', 'url', 'dir', 'log_file', 'started'];
@@ -240,6 +245,7 @@ final class QBittorrentBot
             'last_status_ids' => $this->lastStatusMessageIds,
             'ytdlp_processes' => $this->ytdlpProcesses,
             'ytdlp_queue' => $this->ytdlpQueue,
+            'pendingLimits' => $this->pendingLimits,
             'timestamp' => time()
         ];
         $stateFile = $this->config['state_file'] ?? __DIR__ . '/data/bot_state.json';
@@ -689,6 +695,8 @@ final class QBittorrentBot
             $this->logger->info("ts_dl requested for hash: $hash");
             $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id'], $cb['from']['id']);
             $this->deleteOtherTorrServerMessages($hash, $chatId);
+            unset($this->torrServerMsgIds[$hash]);
+            $this->saveState();
         } elseif (str_starts_with($data, 'ts_ignore:')) {
             $hash = substr($data, 10);
             if (!in_array($hash, $this->notifiedTorrHashes)) {
@@ -697,6 +705,8 @@ final class QBittorrentBot
             }
             $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
             $this->deleteOtherTorrServerMessages($hash, $chatId);
+            unset($this->torrServerMsgIds[$hash]);
+            $this->saveState();
         }
     }
 
@@ -838,6 +848,7 @@ final class QBittorrentBot
                         'attempts' => 0
                     ];
                     $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s (Pending)";
+                    $this->saveState();
                 }
 
                 $msgText = "✅ Magnet added to qBit.\nDir: `{$dir}`$limitInfo";
@@ -1024,7 +1035,8 @@ final class QBittorrentBot
 
         // Fire background process
         $fullCmd = $cmd . ' > ' . escapeshellarg($logFile) . ' 2>&1 & echo $!';
-        $this->logger->info("Starting yt-dlp: $cmd");
+        $jobId = basename($logFile, '.log');
+        $this->logger->info("Starting yt-dlp job: $jobId");
 
         $pid = trim((string) shell_exec($fullCmd));
         if (empty($pid) || !is_numeric($pid)) {
@@ -1035,6 +1047,17 @@ final class QBittorrentBot
         $pid = (int) $pid;
         $this->logger->info("yt-dlp started with PID $pid, log: $logFile");
 
+        $cmdlineBytes = @file_get_contents("/proc/{$pid}/cmdline");
+        $cmdlineHash = $cmdlineBytes !== false ? md5($cmdlineBytes) : '';
+        $statData = @file_get_contents("/proc/{$pid}/stat");
+        $starttime = '';
+        if ($statData) {
+            $statParts = explode(' ', $statData);
+            if (isset($statParts[21])) {
+                $starttime = $statParts[21];
+            }
+        }
+
         // Track for completion polling
         $this->ytdlpProcesses[] = [
             'pid' => $pid,
@@ -1042,7 +1065,9 @@ final class QBittorrentBot
             'url' => $url,
             'dir' => $dir,
             'log_file' => $logFile,
-            'started' => time()
+            'started' => time(),
+            'cmdline_hash' => $cmdlineHash,
+            'starttime' => $starttime
         ];
 
         $this->saveState(); // Persist immediately
@@ -1069,8 +1094,24 @@ final class QBittorrentBot
             $isRunning = false;
             if (file_exists("/proc/{$proc['pid']}")) {
                 $cmdline = (string) @file_get_contents("/proc/{$proc['pid']}/cmdline");
-                if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
-                    $isRunning = true;
+                $cmdlineHash = md5($cmdline);
+                $statData = (string) @file_get_contents("/proc/{$proc['pid']}/stat");
+                $starttime = '';
+                if ($statData) {
+                    $statParts = explode(' ', $statData);
+                    if (isset($statParts[21])) {
+                        $starttime = $statParts[21];
+                    }
+                }
+
+                if (empty($proc['cmdline_hash']) && empty($proc['starttime'])) {
+                    if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
+                        $isRunning = true;
+                    }
+                } else {
+                    if ($cmdlineHash === $proc['cmdline_hash'] && $starttime === $proc['starttime']) {
+                        $isRunning = true;
+                    }
                 }
             }
             if ($isRunning) {
@@ -1173,8 +1214,24 @@ final class QBittorrentBot
             $isRunning = false;
             if (file_exists("/proc/{$pid}")) {
                 $cmdline = (string) @file_get_contents("/proc/{$pid}/cmdline");
-                if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
-                    $isRunning = true;
+                $cmdlineHash = md5($cmdline);
+                $statData = (string) @file_get_contents("/proc/{$pid}/stat");
+                $starttime = '';
+                if ($statData) {
+                    $statParts = explode(' ', $statData);
+                    if (isset($statParts[21])) {
+                        $starttime = $statParts[21];
+                    }
+                }
+
+                if (empty($proc['cmdline_hash']) && empty($proc['starttime'])) {
+                    if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
+                        $isRunning = true;
+                    }
+                } else {
+                    if ($cmdlineHash === $proc['cmdline_hash'] && $starttime === $proc['starttime']) {
+                        $isRunning = true;
+                    }
                 }
             }
 
@@ -1619,17 +1676,24 @@ final class QBittorrentBot
      */
     private function checkPendingLimits(): void
     {
+        $changed = false;
         foreach ($this->pendingLimits as $hash => $limitData) {
             $this->pendingLimits[$hash]['attempts']++;
+            $changed = true;
             $info = $this->qbRequest('/api/v2/torrents/info', ['hashes' => $hash]);
             if (is_array($info) && count($info) > 0) {
-                $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitData['limit']], true);
-                $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
-                unset($this->pendingLimits[$hash]);
+                $res = $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitData['limit']], true);
+                if ($res) {
+                    $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
+                    unset($this->pendingLimits[$hash]);
+                }
             } elseif ($this->pendingLimits[$hash]['attempts'] >= 10) {
                 $this->logger->warning("Failed to apply manual download limit to $hash after 10 attempts (gave up).");
                 unset($this->pendingLimits[$hash]);
             }
+        }
+        if ($changed) {
+            $this->lastSave = 0;
         }
     }
 
