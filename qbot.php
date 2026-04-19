@@ -42,7 +42,7 @@ interface LoggerInterface
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.7';
+    public const VERSION = '1.2.8';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -868,9 +868,21 @@ final class QBittorrentBot
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
             curl_setopt($ch, CURLOPT_FAILONERROR, true);
             curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-            curl_exec($ch);
+
+            $curlResult = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErrno = curl_errno($ch);
+            $curlError = curl_error($ch);
+
             curl_close($ch);
             fclose($fp);
+
+            if ($curlResult === false || $curlErrno !== 0 || $httpCode !== 200) {
+                @unlink($local); // Clean up partially downloaded file
+                $this->logger->error("Failed to download file from Telegram. HTTP Code: {$httpCode}, cURL Error [{$curlErrno}]: {$curlError}");
+                $this->tgSendMessage($chatId, "❌ Failed to download file from Telegram.");
+                return;
+            }
 
             if ($p['type'] === 'file') {
                 $res = $this->qbRequest('/api/v2/torrents/add', ['torrents' => new CURLFile($local), 'savepath' => $dir], true, true);
