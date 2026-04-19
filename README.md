@@ -83,7 +83,7 @@ Choose one:
    php qbot.php
    ```
 
-4. **Running as a Systemd Service** (Production):
+5. **Running as a Systemd Service** (Production):
    For production deployments without Docker, use the included systemd unit file.
 
    **Configuration**:

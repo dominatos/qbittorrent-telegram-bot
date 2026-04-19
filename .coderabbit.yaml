@@ -32,8 +32,5 @@ reviews:
     - path: "**/*.env*"
       instructions: |
         Review environment configuration for proper documentation and warning about credential exposure.
-
-
-
 chat:
   auto_reply: true

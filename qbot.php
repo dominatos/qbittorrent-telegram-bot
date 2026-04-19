@@ -168,6 +168,11 @@ final class QBittorrentBot
 
     // =================== TELEGRAM HELPERS ===================
 
+    private function escapeMarkdown(string $text): string
+    {
+        return str_replace(['_', '*', '[', '`'], ['\_', '\*', '\[', '\`'], $text);
+    }
+
     private function tgApiRequest(string $method, array $params = []): mixed
     {
         $ch = curl_init($this->apiBase['api'] . $method);
@@ -1086,7 +1091,9 @@ final class QBittorrentBot
                 $fileInfoStr = "\n📦 Size: {$totalSizeMb} MB";
             }
 
-            $msg = "🎬 *New in TorrServer:*\n\n`{$name}`{$fileInfoStr}\n\nDownload to qBit?";
+            $safeName = $this->escapeMarkdown($name);
+            $safeFileInfoStr = $this->escapeMarkdown($fileInfoStr);
+            $msg = "🎬 *New in TorrServer:*\n\n{$safeName}{$safeFileInfoStr}\n\nDownload to qBit?";
 
             $keyboard = [
                 'inline_keyboard' => [
