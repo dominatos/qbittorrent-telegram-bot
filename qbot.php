@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.14';
+const QBOT_VERSION = '1.2.15';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -708,6 +708,10 @@ final class QBittorrentBot
             $this->logger->info("set_disk updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
+            if (!isset($this->config['categories'][$sub])) {
+                $this->logger->error("handleCallback aborted: unknown callback category $sub");
+                return;
+            }
             $sub = str_replace(['..', '/', '\\'], '', $sub);
             $diskPath = rtrim($this->config['disks'][$this->pendingDownloads[$chatId]['disk_idx'] ?? 0], '/');
             $path = $diskPath . '/' . $sub;
@@ -1068,8 +1072,6 @@ final class QBittorrentBot
         
         $status = proc_get_status($proc);
         $pid = (int) $status['pid'];
-        
-        proc_close($proc);
 
         $this->logger->info("yt-dlp started with PID $pid, log: $logFile");
 
@@ -1092,7 +1094,8 @@ final class QBittorrentBot
             'log_file' => $logFile,
             'started' => time(),
             'exe' => $exe,
-            'starttime' => $starttime
+            'starttime' => $starttime,
+            'proc' => $proc
         ];
 
         $this->saveState(); // Persist immediately
@@ -1117,7 +1120,16 @@ final class QBittorrentBot
         foreach ($this->ytdlpProcesses as $k => $proc) {
             // Check if process is still running via /proc/{pid} and verify identity to prevent PID recycle matches
             $isRunning = false;
-            if (file_exists("/proc/{$proc['pid']}")) {
+            
+            if (isset($proc['proc']) && is_resource($proc['proc'])) {
+                $status = proc_get_status($proc['proc']);
+                if ($status['running']) {
+                    $isRunning = true;
+                } else {
+                    proc_close($proc['proc']);
+                    $isRunning = false;
+                }
+            } elseif (file_exists("/proc/{$proc['pid']}")) {
                 $exe = (string) @readlink("/proc/{$proc['pid']}/exe");
                 $statData = (string) @file_get_contents("/proc/{$proc['pid']}/stat");
                 $starttime = '';
@@ -1238,8 +1250,7 @@ final class QBittorrentBot
             // Validate both PID existence and process identity to prevent PID recycle matches
             $isRunning = false;
             if (file_exists("/proc/{$pid}")) {
-                $cmdline = (string) @file_get_contents("/proc/{$pid}/cmdline");
-                $cmdlineHash = md5($cmdline);
+                $exe = (string) @readlink("/proc/{$pid}/exe");
                 $statData = (string) @file_get_contents("/proc/{$pid}/stat");
                 $starttime = '';
                 if ($statData) {
@@ -1249,12 +1260,13 @@ final class QBittorrentBot
                     }
                 }
 
-                if (empty($proc['cmdline_hash']) && empty($proc['starttime'])) {
+                if (empty($proc['exe']) && empty($proc['starttime'])) {
+                    $cmdline = (string) @file_get_contents("/proc/{$pid}/cmdline");
                     if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
                         $isRunning = true;
                     }
                 } else {
-                    if ($cmdlineHash === $proc['cmdline_hash'] && $starttime === $proc['starttime']) {
+                    if ($exe === $proc['exe'] && $starttime === $proc['starttime']) {
                         $isRunning = true;
                     }
                 }
@@ -1713,12 +1725,17 @@ final class QBittorrentBot
     {
         $changed = false;
         foreach ($this->pendingLimits as $hash => $limitData) {
+            $nextAttempt = $limitData['next_attempt'] ?? 0;
+            if (time() < $nextAttempt) {
+                continue;
+            }
             $this->pendingLimits[$hash]['attempts']++;
+            $this->pendingLimits[$hash]['next_attempt'] = time() + 5;
             $changed = true;
             $info = $this->qbRequest('/api/v2/torrents/info', ['hashes' => $hash]);
             if (is_array($info) && count($info) > 0) {
                 $res = $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitData['limit']], true);
-                if ($res) {
+                if ($res !== null) {
                     $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
                     unset($this->pendingLimits[$hash]);
                 }
