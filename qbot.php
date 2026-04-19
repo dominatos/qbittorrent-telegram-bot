@@ -30,11 +30,19 @@ interface LoggerInterface
      * @return void
      */
     public function info(string $msg): void;
+
+    /**
+     * Logs a warning message.
+     *
+     * @param string $msg The warning message to log.
+     * @return void
+     */
+    public function warning(string $msg): void;
 }
 
 final class QBittorrentBot
 {
-    public const VERSION = '1.2.5';
+    public const VERSION = '1.2.6';
 
     // =================== CONFIGURATION ===================
     private array $config;
@@ -55,7 +63,7 @@ final class QBittorrentBot
     private int $offset = 0;
     private int $lastCheck = 0;
     private int $lastTorrCheck = 0;
-    private int $lastStatus = 0;
+    private array $pendingLimits = [];
     private int $lastSave = 0;
     private int $torrServerFailCount = 0;
     private LoggerInterface $logger;
@@ -121,11 +129,20 @@ final class QBittorrentBot
                 @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] INFO: $msg\n", FILE_APPEND);
                 echo "INFO: $msg\n";
             }
+            /**
+             * Logs a warning message to the configured log file and to stdout, prefixed with a timestamp and "WARN:".
+             *
+             * @param string $msg The message to log.
+             */
+            public function warning(string $msg): void
+            {
+                @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] WARN: $msg\n", FILE_APPEND);
+                echo "WARN: $msg\n";
+            }
         };
 
         $this->loadState();
         $this->reattachYtdlpProcesses();
-        $this->lastStatus = time();
     }
 
     /**
@@ -258,7 +275,7 @@ final class QBittorrentBot
             CURLOPT_TIMEOUT => $this->config['poll_timeout'] + 5
         ]);
         $res = curl_exec($ch);
-        unset($ch);
+        curl_close($ch);
         $data = json_decode((string) $res, true);
         if (!$data || !isset($data['ok']) || !$data['ok']) {
             $this->logger->error("tgApiRequest failed for method $method. Response: " . (string) $res);
@@ -295,6 +312,7 @@ final class QBittorrentBot
      * @param string|null $parseMode Optional parse mode for the caption (e.g., "MarkdownV2" or "HTML").
      * @param array|null $replyMarkup Optional reply markup array; it will be JSON-encoded for the API.
      * @return mixed The decoded Telegram API response on success, or `null` on failure.
+     */
     private function tgSendPhoto(int $chatId, string $photo, string $caption, ?string $parseMode = null, ?array $replyMarkup = null): mixed
     {
         $params = ['chat_id' => $chatId, 'photo' => $photo, 'caption' => $caption];
@@ -364,13 +382,13 @@ final class QBittorrentBot
 
         if ($resp === false) {
             $this->logger->error("qbLogin curl failed: $err");
-            unset($ch);
+            curl_close($ch);
             return false;
         }
 
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         $header = substr((string) $resp, 0, $headerSize);
-        unset($ch);
+        curl_close($ch);
 
         if (preg_match('/set-cookie:\s*(SID=[^;\s]+)/i', $header, $matches)) {
             $this->qbCookie = $matches[1];
@@ -420,7 +438,7 @@ final class QBittorrentBot
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
-        unset($ch);
+        curl_close($ch);
 
         if ($code === 403) {
             if (!$hasRetried) {
@@ -799,20 +817,15 @@ final class QBittorrentBot
             if ($res !== null) {
                 $limitInfo = "";
 
-                // qBittorrent often ignores dlLimit when adding magnets. Enforce it directly:
+                // qBittorrent often ignores dlLimit when adding magnets. Enforce it directly (async):
                 if ($limitBytesPerSec > 0 && preg_match('/urn:btih:([a-zA-Z0-9]+)/i', $p['magnet'], $m)) {
                     $hash = strtolower($m[1]);
-                    sleep(2); // Wait for qBittorrent to catch up
-                    for ($i = 0; $i < 3; $i++) {
-                        $info = $this->qbRequest('/api/v2/torrents/info', ['hashes' => $hash]);
-                        if (is_array($info) && count($info) > 0) {
-                            $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitBytesPerSec], true);
-                            $this->logger->info("Applied manual download limit $limitBytesPerSec to $hash");
-                            $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s";
-                            break;
-                        }
-                        sleep(1);
-                    }
+                    $this->pendingLimits[$hash] = [
+                        'limit' => $limitBytesPerSec,
+                        'mbit' => $limitMbit,
+                        'attempts' => 0
+                    ];
+                    $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s (Pending)";
                 }
 
                 $msgText = "✅ Magnet added to qBit.\nDir: `{$dir}`$limitInfo";
@@ -839,11 +852,18 @@ final class QBittorrentBot
 
             $local = __DIR__ . '/' . preg_replace('/[^a-zA-Z0-9\._\-]/', '_', $p['name']);
             $fp = fopen($local, 'w+');
+            if ($fp === false) {
+                $this->logger->error("Failed to open file for writing: $local");
+                $this->tgSendMessage($chatId, "❌ Failed to create local file.");
+                return;
+            }
             $ch = curl_init($this->apiBase['file'] . $fileInfo['file_path']);
             curl_setopt($ch, CURLOPT_FILE, $fp);
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_FAILONERROR, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
             curl_exec($ch);
-            unset($ch);
+            curl_close($ch);
             fclose($fp);
 
             if ($p['type'] === 'file') {
@@ -949,7 +969,11 @@ final class QBittorrentBot
             . ' --restrict-filenames';
 
         foreach ($extraArgs as $arg) {
-            $cmd .= ' ' . escapeshellarg($arg);
+            if (is_scalar($arg)) {
+                $cmd .= ' ' . escapeshellarg((string) $arg);
+            } else {
+                $this->logger->warning("Invalid ytdlp_extra_args entry skipped.");
+            }
         }
         $cmd .= ' ' . escapeshellarg($url);
 
@@ -1176,7 +1200,7 @@ final class QBittorrentBot
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
-        unset($ch);
+        curl_close($ch);
 
         if ($code === 204 || $code === 200) {
             $this->logger->info("Jellyfin library refresh triggered successfully.");
@@ -1304,18 +1328,24 @@ final class QBittorrentBot
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_TIMEOUT, 5);
         if (!empty($this->config['torrserver_user'])) {
-            $this->logger->info("Using TorrServer credentials: " . $this->config['torrserver_user']);
+            $this->logger->info("Using TorrServer with credentials configured.");
             curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
             curl_setopt($ch, CURLOPT_USERPWD, $this->config['torrserver_user'] . ":" . ($this->config['torrserver_pass'] ?? ''));
         }
         if (!empty($data)) {
+            $payload = json_encode($data);
+            if ($payload === false) {
+                $this->logger->error("Failed to JSON encode TorrServer request data: " . json_last_error_msg());
+                curl_close($ch);
+                return null;
+            }
             curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $payload);
             curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
         }
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        unset($ch);
+        curl_close($ch);
 
         if ($res === false) {
             $this->logger->error("TorrServer request failed: Curl error");
@@ -1493,6 +1523,26 @@ final class QBittorrentBot
     }
 
     /**
+     * Checks torrents in the pendingLimits queue and applies their download limits.
+     * Removes them from the queue on success or after 10 attempts.
+     */
+    private function checkPendingLimits(): void
+    {
+        foreach ($this->pendingLimits as $hash => $limitData) {
+            $this->pendingLimits[$hash]['attempts']++;
+            $info = $this->qbRequest('/api/v2/torrents/info', ['hashes' => $hash]);
+            if (is_array($info) && count($info) > 0) {
+                $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitData['limit']], true);
+                $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
+                unset($this->pendingLimits[$hash]);
+            } elseif ($this->pendingLimits[$hash]['attempts'] >= 10) {
+                $this->logger->warning("Failed to apply manual download limit to $hash after 10 attempts (gave up).");
+                unset($this->pendingLimits[$hash]);
+            }
+        }
+    }
+
+    /**
      * Run the bot's main loop, polling Telegram updates and executing periodic background tasks.
      *
      * Continuously fetches Telegram updates and dispatches them to the update handler, and periodically:
@@ -1524,6 +1574,7 @@ final class QBittorrentBot
                     $this->checkTorrServer();
                     $this->lastTorrCheck = $now;
                 }
+                $this->checkPendingLimits();
                 $this->checkYtdlpProcesses();
                 if ($now - $this->lastSave >= $this->config['state_save_interval']) {
                     $this->saveState();

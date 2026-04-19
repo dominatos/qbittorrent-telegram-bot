@@ -160,12 +160,14 @@ volumes:
 The bot integrates with [TorrServer](https://github.com/YouROK/TorrServer) to monitor what you are watching and offer a one-click download to qBittorrent.
 
 ### Features
+
 - **Rich Notifications**: Includes movie/series posters, file names, and perceived size.
 - **Smart Labels**: Automatically identifies if media is a single file or a series.
 - **Speed Limits**: Automatically applies a configurable download limit (e.g., 100Mbit/s) so your viewing experience isn't interrupted by background downloads.
 - **Disk Space**: The destination menu displays real-time available space (GB) for each configured disk.
 
 ### Configuration
+
 ```php
     'torrserver_enabled' => true,
     'torrserver_url' => 'http://127.0.0.1:8090',
