@@ -1257,6 +1257,21 @@ final class QBittorrentBot
             $lines[] = "• `{$name}`\n  {$prog}% | {$t['state']}";
         }
         $text = empty($lines) ? "📭 No active torrents." : "📊 *qBit Status*\n\n" . implode("\n", $lines);
+
+        $links = [];
+        if (!empty($this->config['qb_url'])) {
+            $links[] = "[qBittorrent](" . $this->config['qb_url'] . ")";
+        }
+        if (!empty($this->config['torrserver_enabled']) && !empty($this->config['torrserver_url'])) {
+            $links[] = "[TorrServer](" . $this->config['torrserver_url'] . ")";
+        }
+        if (!empty($this->config['jellyfin_enabled']) && !empty($this->config['jellyfin_url'])) {
+            $links[] = "[Jellyfin](" . $this->config['jellyfin_url'] . ")";
+        }
+        if (!empty($links)) {
+            $text .= "\n\n🔗 *Links*: " . implode(" | ", $links);
+        }
+
         $this->logger->info("Sending status message with " . count($lines) . " torrents");
         $res = $this->tgSendMessage($chatId, $text, 'Markdown');
         if ($res && isset($res['message_id'])) {
