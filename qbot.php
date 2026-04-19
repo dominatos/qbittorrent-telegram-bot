@@ -78,15 +78,31 @@ final class QBittorrentBot
 
         $this->logger = new class ($logFile) implements LoggerInterface {
             private string $logFile;
+            /**
+             * Set the log file path used by the instance.
+             *
+             * @param string $logFile Path to the log file where messages will be written.
+             */
             public function __construct(string $logFile)
             {
                 $this->logFile = $logFile;
             }
+            /**
+             * Logs an error message to the configured log file and echoes it to stdout.
+             *
+             * @param string $msg The error message to record.
+             * @return void
+             */
             public function error(string $msg): void
             {
                 @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] ERROR: $msg\n", FILE_APPEND);
                 echo "ERROR: $msg\n";
             }
+            /**
+             * Logs an informational message to the configured log file and to stdout, prefixed with a timestamp and "INFO:".
+             *
+             * @param string $msg The message to log.
+             */
             public function info(string $msg): void
             {
                 @file_put_contents($this->logFile, "[" . date('Y-m-d H:i:s') . "] INFO: $msg\n", FILE_APPEND);
@@ -170,14 +186,12 @@ final class QBittorrentBot
     }
 
     /**
-     * Persist selected bot runtime state to the configured state file.
+     * Save selected runtime state to the configured state file for later restoration.
      *
-     * Serializes a snapshot containing known chat IDs, notified torrent IDs and hashes,
+     * Writes a JSON snapshot containing known chat IDs, notified torrent IDs and hashes,
      * TorrServer notification message IDs, last status message IDs, tracked yt-dlp processes,
-     * and a timestamp as JSON, ensures the state file directory exists, and writes the JSON
-     * to the configured state file (or default data/bot_state.json).
-     *
-     * On failure to write the file an error is logged.
+     * and a timestamp to the configured state file (defaults to __DIR__/data/bot_state.json).
+     * Ensures the state directory exists and logs an error if the file write fails.
      */
     private function saveState(): void
     {
@@ -356,16 +370,16 @@ final class QBittorrentBot
     }
 
     /**
-     * Perform an authenticated request to the qBittorrent WebAPI and return its response.
+     * Send an authenticated request to the qBittorrent WebAPI and return its response.
      *
-     * Attempts to ensure a valid qBittorrent login cookie before issuing the request, retries once on HTTP 403 by re-establishing the session, and only treats HTTP 200/201 responses as successful.
+     * Ensures a valid qBittorrent session cookie (attempting login if missing), retries once on HTTP 403 by re-establishing the session, and treats only HTTP 200/201 responses as successful.
      *
-     * @param string $endpoint API endpoint path (appended to configured qBittorrent base URL).
-     * @param array $params Query parameters for GET or POST body parameters for POST requests.
-     * @param bool $isPost When true, send the request as POST; otherwise send as GET.
-     * @param bool $isFile When true and $isPost is true, send $params as multipart/form-data (file upload); otherwise encode as application/x-www-form-urlencoded.
-     * @param bool $hasRetried Internal flag to avoid infinite retry loops when a re-login has already been attempted.
-     * @return mixed Decoded JSON as an associative array when the response JSON decodes truthily, the raw response string when HTTP 200/201 but JSON decode is falsy, or `null` on HTTP errors, curl failures, or non-200/201 responses.
+     * @param string $endpoint API endpoint path appended to the configured qBittorrent base URL.
+     * @param array $params Query parameters for GET or body parameters for POST.
+     * @param bool $isPost If true, use POST; otherwise use GET.
+     * @param bool $isFile When true and using POST, send $params as multipart/form-data (for file uploads); otherwise encode as application/x-www-form-urlencoded.
+     * @param bool $hasRetried Internal flag to prevent repeated re-login attempts when a 403 has already been retried.
+     * @return mixed Decoded JSON as an associative array when JSON decodes to a truthy value, the raw response string when HTTP 200/201 but JSON decode is falsy, or `null` on HTTP errors, cURL failures, or non-200/201 responses.
      */
     private function qbRequest(string $endpoint, array $params = [], bool $isPost = false, bool $isFile = false, bool $hasRetried = false)
     {
@@ -733,11 +747,11 @@ final class QBittorrentBot
     }
 
     /**
-     * Finalizes a pending download request for a chat by performing the chosen action and notifying the chat.
+     * Finalizes a pending download for a chat by performing the selected action and notifying the chat.
      *
-     * Performs one of: add a magnet to qBittorrent, start a yt-dlp job, or retrieve a Telegram file and place it
-     * into the specified destination directory. Sends a status message to the chat and, on success, schedules that
-     * message for later deletion according to the notification cleanup configuration.
+     * Performs one of three actions based on the pending request: add a magnet to qBittorrent, start a yt-dlp job,
+     * or retrieve a Telegram file/media and place it in the specified destination directory. Sends a status message
+     * to the chat and, on success, schedules that notification for later deletion according to configured cleanup time.
      *
      * @param int $chatId Telegram chat identifier that owns the pending download.
      * @param string $dir Destination directory where the downloaded content should be saved.
@@ -1114,12 +1128,13 @@ final class QBittorrentBot
     }
 
     /**
-     * Trigger a remote Jellyfin library refresh when Jellyfin integration is enabled.
+     * Trigger a Jellyfin library refresh when Jellyfin integration is enabled.
      *
-     * If `jellyfin_enabled` is truthy and a `jellyfin_api_key` is configured, sends a POST to
-     * `{jellyfin_url}/Library/Refresh` with header `X-Emby-Token: {apiKey}` and logs success or failure.
+     * Sends a POST request to {jellyfin_url}/Library/Refresh with the header
+     * `X-Emby-Token: {jellyfin_api_key}` and logs whether the refresh was triggered successfully.
      *
-     * The method is a no-op when Jellyfin integration is disabled or the API key is missing.
+     * If `jellyfin_enabled` is falsey the method does nothing. If the API key is missing the method
+     * logs an error and returns without making a request.
      */
     private function jellyfinRefreshLibrary(): void
     {
@@ -1158,15 +1173,14 @@ final class QBittorrentBot
     }
 
     /**
-     * Sends a Markdown summary of qBittorrent status to a chat and tracks the sent message for later deletion.
+     * Send a Markdown-formatted snapshot of qBittorrent torrents to a Telegram chat and record the sent message IDs for later cleanup.
      *
-     * Deletes any previously stored status messages for the chat, fetches torrents from qBittorrent, applies
-     * the configured status filter and show limit, formats each torrent as a line with name, progress, and state,
-     * and sends the assembled message to the specified Telegram chat. Successfully sent message IDs are recorded
-     * (keeps up to the last 5) so they can be removed on subsequent updates.
+     * Deletes any previously stored status messages for the chat, fetches torrents from qBittorrent, applies the configured
+     * status_filter and status_show_limit, formats each torrent with name, progress, and state, and stores the sent message IDs
+     * (retaining up to the last 5) so they can be removed on subsequent updates.
      *
-     * @param int $chatId Telegram chat identifier to send the status to.
-     * @param bool $interactive Indicates whether the status message is intended to be interactive; currently not used by the implementation.
+     * @param int $chatId Telegram chat identifier to receive the status summary.
+     * @param bool $interactive Currently unused; reserved for callers that may differentiate interactive updates.
      */
     private function sendTorrentStatusToChat(int $chatId, bool $interactive): void
     {
@@ -1260,12 +1274,15 @@ final class QBittorrentBot
     }
 
     /**
-     * Send a request to the configured TorrServer endpoint and return the decoded JSON response.
-     *
-     * @param string $endpoint Path appended to the configured TorrServer base URL (e.g. '/torrents').
-     * @param array $data Optional payload; when provided the request is sent as a JSON POST, otherwise a GET is performed.
-     * @return array|null The response decoded as an associative array, or `null` if the response is empty or not valid JSON.
-     */
+         * Perform a request to the configured TorrServer endpoint and decode its JSON response.
+         *
+         * When $data is empty a GET is performed; when $data is provided a JSON POST is sent.
+         * If TorrServer credentials are configured, HTTP Basic authentication will be used.
+         *
+         * @param string $endpoint Path appended to the configured TorrServer base URL (e.g. '/torrents').
+         * @param array $data Optional payload sent as JSON in a POST request when non-empty.
+         * @return array|null Decoded response as an associative array, or `null` if the response is empty or not valid JSON.
+         */
     private function torrServerRequest(string $endpoint, array $data = []): mixed
     {
         $url = rtrim($this->config['torrserver_url'], '/') . $endpoint;
