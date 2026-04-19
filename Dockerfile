@@ -7,7 +7,7 @@ RUN apk add --no-cache \
     py3-pip \
     ffmpeg \
     && docker-php-ext-install curl \
-    && pip3 install --break-system-packages yt-dlp
+    && pip3 install --break-system-packages --no-cache-dir yt-dlp
 
 # Set working directory
 WORKDIR /app
