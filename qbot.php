@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.12';
+const QBOT_VERSION = '1.2.13';
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -181,7 +181,17 @@ final class QBittorrentBot
         $state = json_decode($raw, true);
         if (is_array($state)) {
             $this->knownChatIds = $state['known_chats'] ?? [];
-            $this->notifiedTorrentIds = $state['notified_torrents'] ?? [];
+            
+            $notified = $state['notified_torrents'] ?? [];
+            $this->notifiedTorrentIds = [];
+            foreach ($notified as $k => $v) {
+                if (is_int($k)) {
+                    $this->notifiedTorrentIds[$v] = time(); // Migrate old flat array format
+                } else {
+                    $this->notifiedTorrentIds[$k] = $v;
+                }
+            }
+            
             $this->notifiedTorrHashes = $state['notified_torr_hashes'] ?? [];
             $this->torrServerMsgIds = $state['torrServerMsgIds'] ?? [];
             // Handle both old format (single ID) and new format (array of IDs)
@@ -255,7 +265,10 @@ final class QBittorrentBot
         }
         $tmp = $stateFile . '.tmp.' . getmypid();
         if (file_put_contents($tmp, json_encode($state)) !== false) {
-            rename($tmp, $stateFile);
+            if (!@rename($tmp, $stateFile)) {
+                @unlink($tmp);
+                $this->logger->error("saveState failed to replace state file: $stateFile");
+            }
         } else {
             @unlink($tmp);
             $this->logger->error("saveState failed to write state to $stateFile");
@@ -573,7 +586,8 @@ final class QBittorrentBot
                 return;
             }
             $this->pendingDownloads[$chatId] = ['type' => $type, 'file_id' => $fileId, 'name' => $name, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
-            $this->tgSendMessage($chatId, "📥 Received: `{$name}`\nChoose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
+            $safeName = $this->escapeMarkdown($name);
+            $this->tgSendMessage($chatId, "📥 Received: `{$safeName}`\nChoose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
         }
     }
 
@@ -772,13 +786,15 @@ final class QBittorrentBot
             'expires' => time() + 600
         ];
 
+        $safeTitle = $this->escapeMarkdown($target['title'] ?? 'Unknown');
+
         // If the original message was a photo, we must use editMessageCaption.
         // Or we can delete the photo message and send a text one.
         if (isset($message['photo'])) {
             $this->tgApiRequest('editMessageCaption', [
                 'chat_id' => $chatId,
                 'message_id' => $messageId,
-                'caption' => "📥 From TorrServer: `{$target['title']}`\nChoose destination:",
+                'caption' => "📥 From TorrServer: `{$safeTitle}`\nChoose destination:",
                 'parse_mode' => 'Markdown',
                 'reply_markup' => json_encode($this->tgCategoryKeyboard($this->config['default_disk_idx']))
             ]);
@@ -786,7 +802,7 @@ final class QBittorrentBot
             $this->tgApiRequest('editMessageText', [
                 'chat_id' => $chatId,
                 'message_id' => $messageId,
-                'text' => "📥 From TorrServer: `{$target['title']}`\nChoose destination:",
+                'text' => "📥 From TorrServer: `{$safeTitle}`\nChoose destination:",
                 'parse_mode' => 'Markdown',
                 'reply_markup' => json_encode($this->tgCategoryKeyboard($this->config['default_disk_idx']))
             ]);
@@ -991,14 +1007,7 @@ final class QBittorrentBot
         }
 
         $binary = $this->config['ytdlp_binary'] ?? 'yt-dlp';
-        if (strpos($binary, DIRECTORY_SEPARATOR) === false) {
-            $resolved = shell_exec("command -v " . escapeshellarg($binary));
-            if (!empty($resolved)) {
-                $binary = trim($resolved);
-            }
-        }
-
-        if (!file_exists($binary) || !is_executable($binary)) {
+        if (strpos($binary, DIRECTORY_SEPARATOR) !== false && (!is_file($binary) || !is_executable($binary))) {
             $this->logger->error("yt-dlp binary not found or not executable: $binary");
             return false;
         }
@@ -1012,43 +1021,50 @@ final class QBittorrentBot
         $format = $this->config['ytdlp_format'] ?? 'bestvideo[height<=1080]+bestaudio/best[height<=1080]';
         $extraArgs = $this->config['ytdlp_extra_args'] ?? [];
 
-        // Build command
-        $cmd = escapeshellarg($binary)
-            . ' -f ' . escapeshellarg($format)
-            . ' -o ' . escapeshellarg($dir . '/%(title)s.%(ext)s')
-            . ' --no-playlist'
-            . ' --newline'
-            . ' --restrict-filenames';
+        $cmd = [
+            $binary,
+            '-f', $format,
+            '-o', $dir . '/%(title)s.%(ext)s',
+            '--no-playlist',
+            '--newline',
+            '--restrict-filenames'
+        ];
 
         foreach ($extraArgs as $arg) {
             if (is_scalar($arg)) {
-                $cmd .= ' ' . escapeshellarg((string) $arg);
+                $cmd[] = (string) $arg;
             } else {
                 $this->logger->warning("Invalid ytdlp_extra_args entry skipped.");
             }
         }
-        $cmd .= ' ' . escapeshellarg($url);
+        $cmd[] = $url;
 
         // Log file for this download
         $logDir = dirname($this->config['log_file'] ?? __DIR__ . '/data/bot.log');
         $logFile = $logDir . '/ytdlp_' . time() . '_' . mt_rand(1000, 9999) . '.log';
 
-        // Fire background process
-        $fullCmd = $cmd . ' > ' . escapeshellarg($logFile) . ' 2>&1 & echo $!';
         $jobId = basename($logFile, '.log');
         $this->logger->info("Starting yt-dlp job: $jobId");
 
-        $pid = trim((string) shell_exec($fullCmd));
-        if (empty($pid) || !is_numeric($pid)) {
-            $this->logger->error("Failed to start yt-dlp process. shell_exec returned: $pid");
+        $descriptors = [
+            1 => ['file', $logFile, 'a'],
+            2 => ['file', $logFile, 'a']
+        ];
+
+        $proc = proc_open($cmd, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
+        if (!is_resource($proc)) {
+            $this->logger->error("Failed to start yt-dlp process via proc_open.");
             return false;
         }
+        
+        $status = proc_get_status($proc);
+        $pid = (int) $status['pid'];
+        
+        proc_close($proc);
 
-        $pid = (int) $pid;
         $this->logger->info("yt-dlp started with PID $pid, log: $logFile");
 
-        $cmdlineBytes = @file_get_contents("/proc/{$pid}/cmdline");
-        $cmdlineHash = $cmdlineBytes !== false ? md5($cmdlineBytes) : '';
+        $exe = (string) @readlink("/proc/{$pid}/exe");
         $statData = @file_get_contents("/proc/{$pid}/stat");
         $starttime = '';
         if ($statData) {
@@ -1066,7 +1082,7 @@ final class QBittorrentBot
             'dir' => $dir,
             'log_file' => $logFile,
             'started' => time(),
-            'cmdline_hash' => $cmdlineHash,
+            'exe' => $exe,
             'starttime' => $starttime
         ];
 
@@ -1093,8 +1109,7 @@ final class QBittorrentBot
             // Check if process is still running via /proc/{pid} and verify identity to prevent PID recycle matches
             $isRunning = false;
             if (file_exists("/proc/{$proc['pid']}")) {
-                $cmdline = (string) @file_get_contents("/proc/{$proc['pid']}/cmdline");
-                $cmdlineHash = md5($cmdline);
+                $exe = (string) @readlink("/proc/{$proc['pid']}/exe");
                 $statData = (string) @file_get_contents("/proc/{$proc['pid']}/stat");
                 $starttime = '';
                 if ($statData) {
@@ -1104,12 +1119,13 @@ final class QBittorrentBot
                     }
                 }
 
-                if (empty($proc['cmdline_hash']) && empty($proc['starttime'])) {
+                if (empty($proc['exe']) && empty($proc['starttime'])) {
+                    $cmdline = (string) @file_get_contents("/proc/{$proc['pid']}/cmdline");
                     if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
                         $isRunning = true;
                     }
                 } else {
-                    if ($cmdlineHash === $proc['cmdline_hash'] && $starttime === $proc['starttime']) {
+                    if ($exe === $proc['exe'] && $starttime === $proc['starttime']) {
                         $isRunning = true;
                     }
                 }
@@ -1434,11 +1450,20 @@ final class QBittorrentBot
      */
     private function checkTorrentCompletions(): void
     {
+        $allTorrents = $this->qbRequest('/api/v2/torrents/info', ['filter' => 'all']);
+        if (is_array($allTorrents)) {
+            $currentHashes = array_column($allTorrents, 'hash');
+            $this->notifiedTorrentIds = array_intersect_key(
+                $this->notifiedTorrentIds,
+                array_flip($currentHashes)
+            );
+        }
+
         $torrents = $this->qbRequest('/api/v2/torrents/info', ['filter' => 'completed']);
         if (!is_array($torrents))
             return;
         foreach ($torrents as $t) {
-            if (in_array($t['hash'], $this->notifiedTorrentIds))
+            if (isset($this->notifiedTorrentIds[$t['hash']]))
                 continue;
 
             $action = strtolower(trim((string) ($this->config['action_on_complete'] ?? 'stop')));
@@ -1451,9 +1476,10 @@ final class QBittorrentBot
             }
 
             foreach ($this->knownChatIds as $cid) {
-                $this->tgSendMessage($cid, "✅ *Finished:* `{$t['name']}`", 'Markdown');
+                $safeName = $this->escapeMarkdown($t['name']);
+                $this->tgSendMessage($cid, "✅ *Finished:* `{$safeName}`", 'Markdown');
             }
-            $this->notifiedTorrentIds[] = $t['hash'];
+            $this->notifiedTorrentIds[$t['hash']] = time();
             $this->saveState();
         }
     }
