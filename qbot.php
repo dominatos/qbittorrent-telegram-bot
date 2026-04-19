@@ -1024,8 +1024,15 @@ final class QBittorrentBot
         }
         $initialCount = count($this->ytdlpProcesses);
         foreach ($this->ytdlpProcesses as $k => $proc) {
-            // Check if process is still running via /proc/{pid}
+            // Check if process is still running via /proc/{pid} and verify identity to prevent PID recycle matches
+            $isRunning = false;
             if (file_exists("/proc/{$proc['pid']}")) {
+                $cmdline = (string)@file_get_contents("/proc/{$proc['pid']}/cmdline");
+                if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
+                    $isRunning = true;
+                }
+            }
+            if ($isRunning) {
                 continue; // Still running
             }
 
@@ -1102,7 +1109,16 @@ final class QBittorrentBot
         foreach ($this->ytdlpProcesses as $proc) {
             $pid = (int) $proc['pid'];
 
+            // Validate both PID existence and process identity to prevent PID recycle matches
+            $isRunning = false;
             if (file_exists("/proc/{$pid}")) {
+                $cmdline = (string)@file_get_contents("/proc/{$pid}/cmdline");
+                if ($cmdline === '' || stripos($cmdline, $proc['url']) !== false || stripos($cmdline, 'yt-dlp') !== false) {
+                    $isRunning = true;
+                }
+            }
+
+            if ($isRunning) {
                 // PID still running — keep tracking; checkYtdlpProcesses() handles the rest
                 $this->logger->info("yt-dlp PID $pid is still running. Resuming monitoring.");
                 $stillActive[] = $proc;
