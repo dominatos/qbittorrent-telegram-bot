@@ -1036,20 +1036,24 @@ final class QBittorrentBot
 
             $this->logger->info("Sending message to known chats. Count: " . count($this->knownChatIds));
             foreach ($this->knownChatIds as $cid) {
+                $res = null;
                 if (!empty($poster)) {
                     $res = $this->tgSendPhoto($cid, $poster, $msg, 'Markdown', $keyboard);
-                    if ($res && isset($res['message_id'])) {
-                        $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
-                    } else {
-                        $this->logger->error("Failed to send photo to $cid");
+                    if (!$res || !isset($res['message_id'])) {
+                        $this->logger->error("Failed to send photo to $cid, falling back to text.");
+                        $res = null;
                     }
-                } else {
+                }
+                
+                if (empty($poster) || !$res) {
                     $res = $this->tgSendMessage($cid, $msg, 'Markdown', $keyboard);
-                    if ($res && isset($res['message_id'])) {
-                        $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
-                    } else {
+                    if (!$res || !isset($res['message_id'])) {
                         $this->logger->error("Failed to send text to $cid");
                     }
+                }
+
+                if ($res && isset($res['message_id'])) {
+                    $this->torrServerMsgIds[$hash][] = ['chat_id' => $cid, 'message_id' => $res['message_id']];
                 }
             }
 
