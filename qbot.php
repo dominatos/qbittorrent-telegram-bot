@@ -163,7 +163,9 @@ final class QBittorrentBot
         if (!is_dir($stateDir)) {
             @mkdir($stateDir, 0775, true);
         }
-        file_put_contents($stateFile, json_encode($state));
+        if (file_put_contents($stateFile, json_encode($state)) === false) {
+            $this->logger->error("saveState failed to write state to $stateFile");
+        }
     }
 
     // =================== TELEGRAM HELPERS ===================
@@ -400,6 +402,15 @@ final class QBittorrentBot
         $chatId = $cb['message']['chat']['id'];
         $data = $cb['data'];
         $this->logger->info("Received callback data: $data from chat: $chatId");
+
+        $callerId = $cb['from']['id'];
+        $isPendingOwner = isset($this->pendingDownloads[$chatId]) && ($this->pendingDownloads[$chatId]['user_id'] ?? null) === $callerId;
+        $isWhitelisted = in_array($callerId, $this->config['allowed_user_ids'] ?? []);
+
+        if (!$isWhitelisted && !$isPendingOwner) {
+            $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Not authorized.", 'show_alert' => true]);
+            return;
+        }
 
         // Verify authorization for dl / set_disk
         if (str_starts_with($data, 'set_disk:') || str_starts_with($data, 'dl:')) {
@@ -674,7 +685,14 @@ final class QBittorrentBot
 
     private function startYtdlpDownload(string $url, string $dir, int $chatId): bool
     {
-        $binary = $this->config['ytdlp_binary'] ?? '/usr/local/bin/yt-dlp';
+        $binary = $this->config['ytdlp_binary'] ?? 'yt-dlp';
+        if (strpos($binary, DIRECTORY_SEPARATOR) === false) {
+            $resolved = shell_exec("command -v " . escapeshellarg($binary));
+            if (!empty($resolved)) {
+                $binary = trim($resolved);
+            }
+        }
+
         if (!file_exists($binary) || !is_executable($binary)) {
             $this->logger->error("yt-dlp binary not found or not executable: $binary");
             return false;
@@ -728,6 +746,8 @@ final class QBittorrentBot
             'log_file' => $logFile,
             'started' => time()
         ];
+
+        $this->saveState(); // Persist immediately
 
         return true;
     }

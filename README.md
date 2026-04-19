@@ -191,7 +191,7 @@ The bot supports downloading videos from YouTube, Vimeo, Twitter/X, and many oth
 ### Configuration
 ```php
     'ytdlp_enabled' => true,
-    'ytdlp_binary' => '/usr/local/bin/yt-dlp',
+    'ytdlp_binary' => 'yt-dlp',
     'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
     'ytdlp_extra_args' => [],  // e.g. ['--cookies', '/path/to/cookies.txt']
     'ytdlp_domains' => [
