@@ -111,6 +111,7 @@ final class QBittorrentBot
             $this->knownChatIds = $state['known_chats'] ?? [];
             $this->notifiedTorrentIds = $state['notified_torrents'] ?? [];
             $this->notifiedTorrHashes = $state['notified_torr_hashes'] ?? [];
+            $this->torrServerMsgIds = $state['torrServerMsgIds'] ?? [];
             // Handle both old format (single ID) and new format (array of IDs)
             $statusIds = $state['last_status_ids'] ?? [];
             foreach ($statusIds as $chatId => $ids) {
@@ -154,6 +155,7 @@ final class QBittorrentBot
             'known_chats' => array_values(array_unique($this->knownChatIds)),
             'notified_torrents' => $this->notifiedTorrentIds,
             'notified_torr_hashes' => $this->notifiedTorrHashes,
+            'torrServerMsgIds' => $this->torrServerMsgIds,
             'last_status_ids' => $this->lastStatusMessageIds,
             'ytdlp_processes' => $this->ytdlpProcesses,
             'timestamp' => time()
