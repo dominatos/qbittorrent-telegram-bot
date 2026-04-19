@@ -185,7 +185,7 @@ final class QBittorrentBot
             CURLOPT_TIMEOUT => $this->config['poll_timeout'] + 5
         ]);
         $res = curl_exec($ch);
-        curl_close($ch);
+        unset($ch);
         $data = json_decode((string) $res, true);
         if (!$data || !isset($data['ok']) || !$data['ok']) {
             $this->logger->error("tgApiRequest failed for method $method. Response: " . (string) $res);
@@ -256,13 +256,13 @@ final class QBittorrentBot
 
         if ($resp === false) {
             $this->logger->error("qbLogin curl failed: $err");
-            curl_close($ch);
+            unset($ch);
             return false;
         }
 
         $headerSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
         $header = substr((string) $resp, 0, $headerSize);
-        curl_close($ch);
+        unset($ch);
 
         if (preg_match('/set-cookie:\s*(SID=[^;\s]+)/i', $header, $matches)) {
             $this->qbCookie = $matches[1];
@@ -300,7 +300,7 @@ final class QBittorrentBot
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
-        curl_close($ch);
+        unset($ch);
 
         if ($code === 403) {
             if (!$hasRetried) {
@@ -630,6 +630,7 @@ final class QBittorrentBot
             curl_setopt($ch, CURLOPT_FILE, $fp);
             curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
             curl_exec($ch);
+            unset($ch);
             fclose($fp);
 
             if ($p['type'] === 'file') {
@@ -916,7 +917,7 @@ final class QBittorrentBot
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err = curl_error($ch);
-        curl_close($ch);
+        unset($ch);
 
         if ($code === 204 || $code === 200) {
             $this->logger->info("Jellyfin library refresh triggered successfully.");
@@ -1025,7 +1026,7 @@ final class QBittorrentBot
         }
         $res = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        unset($ch);
 
         if ($res === false) {
             $this->logger->error("TorrServer request failed: Curl error");
