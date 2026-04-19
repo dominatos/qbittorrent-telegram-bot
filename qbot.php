@@ -546,6 +546,7 @@ final class QBittorrentBot
         $isWhitelisted = in_array($callerId, $this->config['allowed_user_ids'] ?? []);
 
         if (!$isWhitelisted && !$isPendingOwner) {
+            $this->logger->warning("Unauthorized callback ($data) attempt from user $callerId in chat $chatId.");
             $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Not authorized.", 'show_alert' => true]);
             return;
         }
@@ -553,20 +554,45 @@ final class QBittorrentBot
         // Verify authorization for dl / set_disk
         if (str_starts_with($data, 'set_disk:') || str_starts_with($data, 'dl:')) {
             if (!isset($this->pendingDownloads[$chatId])) {
+                $this->logger->warning("Callback ($data) rejected: no pending download for chat $chatId.");
                 $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "No pending download or session expired.", 'show_alert' => true]);
                 return;
             }
-            if (($this->pendingDownloads[$chatId]['user_id'] ?? $cb['from']['id']) !== $cb['from']['id']) {
+            if (($this->pendingDownloads[$chatId]['user_id'] ?? $callerId) !== $callerId) {
+                $this->logger->warning("Callback ($data) rejected: user $callerId attempted to interact with a download owned by another user in chat $chatId.");
                 $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Not authorized. This isn't your download.", 'show_alert' => true]);
                 return;
+            }
+
+            // Verify disk_idx validity
+            if (str_starts_with($data, 'set_disk:')) {
+                $idx = substr($data, 9);
+                if (!is_numeric($idx) || !isset($this->config['disks'][(int) $idx])) {
+                    $this->logger->warning("Callback ($data) rejected: invalid disk_idx '$idx'.");
+                    $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Invalid disk selected.", 'show_alert' => true]);
+                    return;
+                }
+            } elseif (str_starts_with($data, 'dl:')) {
+                $idx = $this->pendingDownloads[$chatId]['disk_idx'] ?? 0;
+                if (!is_numeric($idx) || !isset($this->config['disks'][(int) $idx])) {
+                    $this->logger->warning("Callback ($data) rejected: invalid disk_idx '$idx' configured.");
+                    $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Invalid disk configured for download.", 'show_alert' => true]);
+                    return;
+                }
             }
         }
 
         // Validate ts_dl and ts_ignore freshness
         if (str_starts_with($data, 'ts_dl:') || str_starts_with($data, 'ts_ignore:')) {
             $hash = str_starts_with($data, 'ts_dl:') ? substr($data, 6) : substr($data, 10);
-            if (!isset($this->torrServerMsgIds[$hash]) && in_array($hash, $this->notifiedTorrHashes)) {
-                $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "This TorrServer item was already processed.", 'show_alert' => true]);
+            if (!isset($this->torrServerMsgIds[$hash])) {
+                if (in_array($hash, $this->notifiedTorrHashes)) {
+                    $this->logger->warning("Callback ($data) rejected for user $callerId: TorrServer item already processed.");
+                    $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "This TorrServer item was already processed.", 'show_alert' => true]);
+                } else {
+                    $this->logger->warning("Callback ($data) rejected for user $callerId: Unrecognized TorrServer item.");
+                    $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "Unrecognized TorrServer item or session expired.", 'show_alert' => true]);
+                }
                 return;
             }
         }
@@ -575,9 +601,6 @@ final class QBittorrentBot
 
         if (str_starts_with($data, 'set_disk:')) {
             $idx = (int) substr($data, 9);
-            if (!isset($this->config['disks'][$idx])) {
-                return;
-            }
             $this->pendingDownloads[$chatId]['disk_idx'] = $idx;
 
             // If the original message is a photo, we can only edit its caption and markup using editMessageCaption
