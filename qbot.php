@@ -758,7 +758,7 @@ final class QBittorrentBot
         if (empty($this->ytdlpProcesses)) {
             return;
         }
-
+        $initialCount = count($this->ytdlpProcesses);
         foreach ($this->ytdlpProcesses as $k => $proc) {
             // Check if process is still running via /proc/{pid}
             if (file_exists("/proc/{$proc['pid']}")) {
@@ -812,8 +812,10 @@ final class QBittorrentBot
             @unlink($proc['log_file']);
             unset($this->ytdlpProcesses[$k]);
         }
-
-        $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
+        if (count($this->ytdlpProcesses) !== $initialCount) {
+            $this->ytdlpProcesses = array_values($this->ytdlpProcesses);
+            $this->saveState(); // Flush pruned jobs dynamically to prevent polling ghosts.
+        }
     }
 
     private function reattachYtdlpProcesses(): void
