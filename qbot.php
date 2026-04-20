@@ -4,7 +4,8 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.15';
+const QBOT_VERSION = '1.2.17';
+const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
     die("This script must be run from the command line.\n");
@@ -262,7 +263,10 @@ final class QBittorrentBot
             'notified_torr_hashes' => $this->notifiedTorrHashes,
             'torrServerMsgIds' => $this->torrServerMsgIds,
             'last_status_ids' => $this->lastStatusMessageIds,
-            'ytdlp_processes' => $this->ytdlpProcesses,
+            'ytdlp_processes' => array_map(function($p) {
+                unset($p['proc']);
+                return $p;
+            }, $this->ytdlpProcesses),
             'ytdlp_queue' => $this->ytdlpQueue,
             'pendingLimits' => $this->pendingLimits,
             'timestamp' => time()
@@ -496,7 +500,11 @@ final class QBittorrentBot
         }
 
         $this->logger->info("qbRequest $endpoint returned code $code");
-        return in_array($code, [200, 201]) ? (json_decode((string) $res, true) ?: $res) : null;
+        if (in_array($code, [200, 201])) {
+            $decoded = json_decode((string) $res, true);
+            return json_last_error() === JSON_ERROR_NONE ? $decoded : $res;
+        }
+        return null;
     }
 
     /**
@@ -874,7 +882,8 @@ final class QBittorrentBot
                     $this->pendingLimits[$hash] = [
                         'limit' => $limitBytesPerSec,
                         'mbit' => $limitMbit,
-                        'attempts' => 0
+                        'attempts' => 0,
+                        'next_attempt' => 0
                     ];
                     $limitInfo = "\nSpeed Limit: {$limitMbit} Mbit/s (Pending)";
                     $this->saveState();
@@ -1491,7 +1500,7 @@ final class QBittorrentBot
             if (in_array($action, ['remove_data', 'delete_data'])) {
                 $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'true'], true);
             } elseif (in_array($action, ['remove', 'delete'])) {
-                $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash']], true);
+                $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'false'], true);
             } else {
                 $this->qbRequest('/api/v2/torrents/pause', ['hashes' => $t['hash']], true);
             }
@@ -1739,8 +1748,8 @@ final class QBittorrentBot
                     $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
                     unset($this->pendingLimits[$hash]);
                 }
-            } elseif ($this->pendingLimits[$hash]['attempts'] >= 10) {
-                $this->logger->warning("Failed to apply manual download limit to $hash after 10 attempts (gave up).");
+            } elseif ($this->pendingLimits[$hash]['attempts'] >= MAX_PENDING_LIMIT_ATTEMPTS) {
+                $this->logger->warning("Failed to apply manual download limit to $hash after " . MAX_PENDING_LIMIT_ATTEMPTS . " attempts (gave up).");
                 unset($this->pendingLimits[$hash]);
             }
         }
