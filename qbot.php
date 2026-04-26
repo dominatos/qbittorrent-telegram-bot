@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.17';
+const QBOT_VERSION = '1.2.18';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -191,7 +191,7 @@ final class QBittorrentBot
         $state = json_decode($raw, true);
         if (is_array($state)) {
             $this->knownChatIds = $state['known_chats'] ?? [];
-            
+
             $notified = $state['notified_torrents'] ?? [];
             $this->notifiedTorrentIds = [];
             foreach ($notified as $k => $v) {
@@ -201,7 +201,7 @@ final class QBittorrentBot
                     $this->notifiedTorrentIds[$k] = $v;
                 }
             }
-            
+
             $this->notifiedTorrHashes = $state['notified_torr_hashes'] ?? [];
             $this->torrServerMsgIds = $state['torrServerMsgIds'] ?? [];
             // Handle both old format (single ID) and new format (array of IDs)
@@ -263,7 +263,7 @@ final class QBittorrentBot
             'notified_torr_hashes' => $this->notifiedTorrHashes,
             'torrServerMsgIds' => $this->torrServerMsgIds,
             'last_status_ids' => $this->lastStatusMessageIds,
-            'ytdlp_processes' => array_map(function($p) {
+            'ytdlp_processes' => array_map(function ($p) {
                 unset($p['proc']);
                 return $p;
             }, $this->ytdlpProcesses),
@@ -277,14 +277,20 @@ final class QBittorrentBot
             @mkdir($stateDir, 0775, true);
         }
         $tmp = $stateFile . '.tmp.' . getmypid();
-        if (file_put_contents($tmp, json_encode($state)) !== false) {
+        $json = json_encode($state);
+        if ($json === false || json_last_error() !== JSON_ERROR_NONE) {
+            $this->logger->error("saveState json_encode failed: " . json_last_error_msg());
+            return;
+        }
+        $written = file_put_contents($tmp, $json);
+        if ($written === strlen($json)) {
             if (!@rename($tmp, $stateFile)) {
                 @unlink($tmp);
-                $this->logger->error("saveState failed to replace state file: $stateFile");
+                $this->logger->error("saveState failed to rename tmp to state file: $stateFile");
             }
         } else {
             @unlink($tmp);
-            $this->logger->error("saveState failed to write state to $stateFile");
+            $this->logger->error("saveState write size mismatch or failure for $stateFile (expected " . strlen($json) . ", got " . var_export($written, true) . ")");
         }
     }
 
@@ -716,11 +722,11 @@ final class QBittorrentBot
             $this->logger->info("set_disk updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
+            $sub = str_replace(['..', '/', '\\'], '', $sub);
             if (!isset($this->config['categories'][$sub])) {
                 $this->logger->error("handleCallback aborted: unknown callback category $sub");
                 return;
             }
-            $sub = str_replace(['..', '/', '\\'], '', $sub);
             $diskPath = rtrim($this->config['disks'][$this->pendingDownloads[$chatId]['disk_idx'] ?? 0], '/');
             $path = $diskPath . '/' . $sub;
             $this->tgApiRequest('deleteMessage', ['chat_id' => $chatId, 'message_id' => $cb['message']['message_id']]);
@@ -1045,8 +1051,10 @@ final class QBittorrentBot
 
         $cmd = [
             $binary,
-            '-f', $format,
-            '-o', $dir . '/%(title)s.%(ext)s',
+            '-f',
+            $format,
+            '-o',
+            $dir . '/%(title)s.%(ext)s',
             '--no-playlist',
             '--newline',
             '--restrict-filenames'
@@ -1078,7 +1086,7 @@ final class QBittorrentBot
             $this->logger->error("Failed to start yt-dlp process via proc_open.");
             return false;
         }
-        
+
         $status = proc_get_status($proc);
         $pid = (int) $status['pid'];
 
@@ -1129,7 +1137,7 @@ final class QBittorrentBot
         foreach ($this->ytdlpProcesses as $k => $proc) {
             // Check if process is still running via /proc/{pid} and verify identity to prevent PID recycle matches
             $isRunning = false;
-            
+
             if (isset($proc['proc']) && is_resource($proc['proc'])) {
                 $status = proc_get_status($proc['proc']);
                 if ($status['running']) {
@@ -1637,7 +1645,8 @@ final class QBittorrentBot
                         $fSize = $files[0]['length'] ?? 0;
                         if ($fSize > 0) {
                             $fSizeMb = round($fSize / 1024 / 1024, 1);
-                            $fileInfoStr = "\n📄 File: `{$fName}`\n📦 Size: {$fSizeMb} MB";
+                            $safeFName = $this->escapeMarkdown($fName);
+                            $fileInfoStr = "\n📄 File: `{$safeFName}`\n📦 Size: {$fSizeMb} MB";
                         }
                     } else {
                         $totalSizeMb = round($totalSize / 1024 / 1024, 1);
@@ -1652,8 +1661,7 @@ final class QBittorrentBot
             }
 
             $safeName = $this->escapeMarkdown($name);
-            $safeFileInfoStr = $this->escapeMarkdown($fileInfoStr);
-            $msg = "🎬 *New in TorrServer:*\n\n{$safeName}{$safeFileInfoStr}\n\nDownload to qBit?";
+            $msg = "🎬 *New in TorrServer:*\n\n`{$safeName}`{$fileInfoStr}\n\nDownload to qBit?";
 
             $keyboard = [
                 'inline_keyboard' => [
@@ -1746,6 +1754,9 @@ final class QBittorrentBot
                 $res = $this->qbRequest('/api/v2/torrents/setDownloadLimit', ['hashes' => $hash, 'limit' => $limitData['limit']], true);
                 if ($res !== null) {
                     $this->logger->info("Applied manual download limit {$limitData['limit']} to $hash");
+                    unset($this->pendingLimits[$hash]);
+                } elseif ($this->pendingLimits[$hash]['attempts'] >= MAX_PENDING_LIMIT_ATTEMPTS) {
+                    $this->logger->warning("setDownloadLimit for $hash returned null after " . MAX_PENDING_LIMIT_ATTEMPTS . " attempts (torrent visible, gave up).");
                     unset($this->pendingLimits[$hash]);
                 }
             } elseif ($this->pendingLimits[$hash]['attempts'] >= MAX_PENDING_LIMIT_ATTEMPTS) {
