@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.21';
+const QBOT_VERSION = '1.2.22';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -219,7 +219,8 @@ final class QBittorrentBot
         }
         $state = json_decode($raw, true);
         if (is_array($state)) {
-            $this->knownChatIds = $state['known_chats'] ?? [];
+            $tmp = $state['known_chats'] ?? [];
+            $this->knownChatIds = is_array($tmp) ? $tmp : [];
 
             $notified = $state['notified_torrents'] ?? [];
             $this->notifiedTorrentIds = [];
@@ -231,8 +232,10 @@ final class QBittorrentBot
                 }
             }
 
-            $this->notifiedTorrHashes = $state['notified_torr_hashes'] ?? [];
-            $this->torrServerMsgIds = $state['torrServerMsgIds'] ?? [];
+            $tmp = $state['notified_torr_hashes'] ?? [];
+            $this->notifiedTorrHashes = is_array($tmp) ? $tmp : [];
+            $tmp = $state['torrServerMsgIds'] ?? [];
+            $this->torrServerMsgIds = is_array($tmp) ? $tmp : [];
             // Handle both old format (single ID) and new format (array of IDs)
             $statusIds = $state['last_status_ids'] ?? [];
             foreach ($statusIds as $chatId => $ids) {
@@ -245,7 +248,8 @@ final class QBittorrentBot
             }
 
             // Restore yt-dlp processes (backward-compatible: key may be absent)
-            $this->ytdlpQueue = $state['ytdlp_queue'] ?? [];
+            $tmp = $state['ytdlp_queue'] ?? [];
+            $this->ytdlpQueue = is_array($tmp) ? $tmp : [];
             $requiredYtdlpKeys = ['pid', 'chat_id', 'url', 'dir', 'log_file', 'started'];
             foreach ($state['ytdlp_processes'] ?? [] as $proc) {
                 if (!is_array($proc)) {
@@ -766,10 +770,12 @@ final class QBittorrentBot
         } elseif (str_starts_with($data, 'ts_dl:')) {
             $hash = substr($data, 6);
             $this->logger->info("ts_dl requested for hash: $hash");
-            $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id'], $cb['from']['id']);
-            $this->deleteOtherTorrServerMessages($hash, $chatId);
-            unset($this->torrServerMsgIds[$hash]);
-            $this->saveState();
+            $success = $this->handleTorrServerDownload($chatId, $hash, $cb['message'], $cb['message']['message_id'], $cb['from']['id']);
+            if ($success) {
+                $this->deleteOtherTorrServerMessages($hash, $chatId);
+                unset($this->torrServerMsgIds[$hash]);
+                $this->saveState();
+            }
         } elseif (str_starts_with($data, 'ts_ignore:')) {
             $hash = substr($data, 10);
             if (!in_array($hash, $this->notifiedTorrHashes)) {
@@ -795,14 +801,14 @@ final class QBittorrentBot
      * @param int   $messageId Telegram message id to edit with the destination prompt.
      * @param int   $userId    Telegram user id of the requester; stored as the pending download owner.
      */
-    private function handleTorrServerDownload(int $chatId, string $hash, array $message, int $messageId, int $userId): void
+    private function handleTorrServerDownload(int $chatId, string $hash, array $message, int $messageId, int $userId): bool
     {
         $this->logger->info("handleTorrServerDownload started for $hash");
         $res = $this->torrServerRequest('/torrents', ['action' => 'list']);
         if (!is_array($res)) {
             $this->logger->error("Could not reach TorrServer during handleTorrServerDownload");
             $this->tgSendMessage($chatId, "❌ Could not reach TorrServer.");
-            return;
+            return false;
         }
 
         $target = null;
@@ -816,7 +822,7 @@ final class QBittorrentBot
         if (!$target) {
             $this->logger->error("Torrent $hash not found in TorrServer list");
             $this->tgSendMessage($chatId, "❌ Torrent not found in TorrServer.");
-            return;
+            return false;
         }
 
         $magnet = "";
@@ -827,7 +833,7 @@ final class QBittorrentBot
             if (strlen($sanitizedHash) !== 40 && strlen($sanitizedHash) !== 32) {
                 $this->logger->error("Invalid torrent hash: {$target['hash']}");
                 $this->tgSendMessage($chatId, "❌ Invalid torrent hash format.");
-                return;
+                return false;
             }
             $title = urlencode($target['title'] ?? 'Unknown');
             $magnet = "magnet:?xt=urn:btih:{$sanitizedHash}&dn={$title}";
@@ -870,6 +876,7 @@ final class QBittorrentBot
             $this->notifiedTorrHashes[] = $hash;
             $this->saveState();
         }
+        return true;
     }
 
     /**
