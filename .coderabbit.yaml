@@ -1,0 +1,38 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+early_access: false
+
+reviews:
+  profile: "assertive"
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  review_details: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - ".*"
+  path_filters:
+    - "**"
+    - "!**/.git/**"
+    - "!**/node_modules/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/*.lock"
+    - "!**/vendor/**"
+  path_instructions:
+    - path: "**/*.php"
+      instructions: |
+        Focus on Telegram bot command safety, qBittorrent API error handling, retry logic, timeouts, and resource cleanup.
+        Emphasize input validation, anti-CSRF patterns, protection against command injection, and secret leakage.
+        Flag unsafe `shell_exec()`/`system()`/`exec()` calls, improper escaping, and unbounded background work or loops.
+    - path: "**/*.{yml,yaml,json}"
+      instructions: |
+        Review configuration files for valid defaults, secret exposure, bot permissions, and exposed credentials.
+        Flag hardcoded URLs, passwords, and overly permissive settings.
+    - path: "**/*.env*"
+      instructions: |
+        Review environment configuration for proper documentation and warning about credential exposure.
+chat:
+  auto_reply: true
