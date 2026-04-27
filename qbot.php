@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.18';
+const QBOT_VERSION = '1.2.19';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -722,7 +722,6 @@ final class QBittorrentBot
             $this->logger->info("set_disk updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
-            $sub = str_replace(['..', '/', '\\'], '', $sub);
             if (!isset($this->config['categories'][$sub])) {
                 $this->logger->error("handleCallback aborted: unknown callback category $sub");
                 return;
