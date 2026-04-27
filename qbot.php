@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.20';
+const QBOT_VERSION = '1.2.21';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -47,35 +47,57 @@ interface LoggerInterface
 final class QBittorrentBot
 {
     // =================== CONFIGURATION ===================
+    /** @var array Bot configuration loaded from config.php */
     private array $config;
 
     // =================== STATE ===================
+    /** @var array Telegram API base URLs (api and file) */
     private array $apiBase;
+    /** @var array Pending download requests tracked per chat ID */
     private array $pendingDownloads = [];
+    /** @var array Map of chat ID to array of last status message IDs for cleanup */
     private array $lastStatusMessageIds = [];
+    /** @var array List of chat IDs the bot has interacted with or are whitelisted */
     private array $knownChatIds = [];
+    /** @var array Map of torrent hash/ID to notification timestamp to prevent completion duplicates */
     private array $notifiedTorrentIds = [];
+    /** @var array List of TorrServer hashes already notified to users */
     private array $notifiedTorrHashes = [];
+    /** @var array Map of TorrServer hash to array of notification message info for cross-chat cleanup */
     private array $torrServerMsgIds = []; // hash => [['chat_id'=>int,'message_id'=>int], ...]
+    /** @var array List of messages scheduled for deletion */
     private array $pendingDeletions = [];
+    /** @var array Tracked background yt-dlp processes with metadata */
     private array $ytdlpProcesses = []; // ['pid'=>int,'chat_id'=>int,'url'=>string,'dir'=>string,'log_file'=>string,'started'=>int]
+    /** @var array Enqueued yt-dlp jobs waiting for a concurrency slot */
     private array $ytdlpQueue = []; // ['url'=>string,'dir'=>string,'chat_id'=>int,'queued'=>int]
+    /** @var string|null Active qBittorrent session SID cookie */
     private ?string $qbCookie = null;
+    /** @var array Map of torrent hash to attempt count and first-seen timestamp for retry logic */
     private array $pendingTorrents = []; // ['hash' => ['attempts' => 0, 'first_seen' => timestamp]]
 
+    /** @var int Telegram update offset for polling */
     private int $offset = 0;
+    /** @var int Timestamp of the last qBittorrent status check */
     private int $lastCheck = 0;
+    /** @var int Timestamp of the last TorrServer polling check */
     private int $lastTorrCheck = 0;
+    /** @var array Map of torrent hash to speed limit settings for async enforcement */
     private array $pendingLimits = [];
+    /** @var int Timestamp of the last state file persistence */
     private int $lastSave = 0;
+    /** @var int Consecutive failure count for TorrServer requests */
     private int $torrServerFailCount = 0;
+    /** @var LoggerInterface Logger instance for recording system events */
     private LoggerInterface $logger;
 
     /**
-         * Initialize the bot runtime and restore persisted state.
-         *
-         * Loads and validates configuration, prepares Telegram API endpoints and a file-backed logger, restores saved bot state, and reattaches any tracked background yt-dlp jobs.
-         */
+     * Initialize the bot runtime: load configuration, prepare logging and API endpoints, restore state, and reattach background jobs.
+     *
+     * Loads and validates `config.php` (terminates the process with a brief message if the file is missing), builds Telegram API base URLs, ensures the configured log directory exists, instantiates a file-backed logger, restores persisted bot state, reattaches any tracked background yt-dlp processes, and initializes the status timestamp.
+     * 
+     * Validates that all required configuration keys (`bot_token`, `allowed_user_ids`, `disks`, `qb_url`, `categories`) are present.
+     */
     public function __construct()
     {
         $configFile = __DIR__ . '/config.php';
@@ -167,7 +189,13 @@ final class QBittorrentBot
      *
      * Restores known chats, notified torrent IDs, notified TorrServer hashes, TorrServer message ID mappings,
      * last status message IDs (supports both single-ID and array formats), and validated yt-dlp process entries.
-     * If the configured state file is missing the legacy location is checked; if the file cannot be read the method logs an error and returns without modifying state.
+     * 
+     * Key restoration logic:
+     * - Migrates `notified_torrents` from flat arrays to map format if needed.
+     * - Handles `last_status_ids` legacy format (single ID) by wrapping them into arrays.
+     * - Validates `ytdlp_processes` entries against required keys before restoration.
+     * 
+     * If the configured state file is missing, the legacy location is checked; if the file cannot be read, the method logs an error and returns without modifying state.
      *
      * Also merges any configured `allowed_user_ids` into the known chats list so those users receive notifications even if they have not interacted with the bot.
      */
@@ -253,8 +281,12 @@ final class QBittorrentBot
      *
      * Writes a JSON snapshot containing known chat IDs, notified torrent IDs and hashes,
      * TorrServer notification message IDs, last status message IDs, tracked yt-dlp processes,
-     * and a timestamp to the configured state file (defaults to __DIR__/data/bot_state.json).
-     * Ensures the state directory exists and logs an error if the file write fails.
+     * and a timestamp to the configured state file (defaults to `data/bot_state.json`).
+     * 
+     * Implementation details:
+     * - Uses an atomic write pattern: writes to a `.tmp` file first, then renames it to the target file.
+     * - Ensures the state directory exists before writing.
+     * - Logs an error if the JSON encoding or the file write/rename fails.
      */
     private function saveState(): void
     {
@@ -311,14 +343,18 @@ final class QBittorrentBot
     }
 
     /**
-         * Call a Telegram Bot API method and return the method's `result` on success.
-         *
-         * Sends the given parameters to the configured Telegram API endpoint and decodes the JSON response.
-         *
-         * @param string $method Telegram API method name (e.g., "sendMessage").
-         * @param array $params Parameters to include in the request.
-         * @return mixed The `result` field from the Telegram API response, or `null` if the request failed or the API reported an error.
-         */
+     * Calls a Telegram Bot API method and returns the method result on success.
+     *
+     * Executes an HTTP POST to the configured Telegram API base URL with the provided parameters.
+     * Uses cURL for the request and decodes the JSON response.
+     *
+     * @param string $method Telegram API method name (e.g., "sendMessage").
+     * @param array $params Parameters to include in the POST request.
+     * @return mixed The `result` field from the Telegram response, or `null` if the request failed or the response's `ok` flag is false (an error is logged on failure).
+     * 
+     * Note on PHP 8.0+: cURL handle cleanup is automatic as `$ch` is now an object (`CurlHandle`) that is garbage-collected when it falls out of scope. 
+     * The `curl_close()` call is retained for legacy compatibility but is a no-op in modern PHP and deprecated since 8.5.
+     */
     private function tgApiRequest(string $method, array $params = []): mixed
     {
         $ch = curl_init($this->apiBase['api'] . $method);
@@ -518,15 +554,17 @@ final class QBittorrentBot
     }
 
     /**
-     * Route and handle a single Telegram update.
+     * Route and handle a single Telegram update: commands, magnets, media, or callbacks.
      *
-     * Delegates callback queries to handleCallback, ignores non-message updates or messages from users not in
-     * configured allowed_user_ids, registers new chats, handles the /status command, creates pending download
-     * sessions for magnet links and configured yt-dlp URLs (and prompts for destination), and forwards other
-     * messages to processMedia for document/video/photo handling.
+     * Processes the provided Telegram update by:
+     * - Delegating callback queries to `handleCallback()`.
+     * - Ignoring non-message updates or messages from unauthorized users.
+     * - Registering new chats into the known chat list and persisting state.
+     * - Handling the `/status` command by clearing the trigger and sending a status summary.
+     * - Detecting magnet links and yt-dlp URLs to create pending download sessions.
+     * - Forwarding other messages (documents, videos, photos) to `processMedia()`.
      *
-     * @param array $u Telegram update object as received from getUpdates; expected to contain either a
-     *                 'callback_query' key or a 'message' key (which may include 'text', 'from', and 'chat').
+     * @param array $u Telegram update object from `getUpdates`.
      */
 
     public function handleUpdate(array $u): void
@@ -618,22 +656,17 @@ final class QBittorrentBot
     /**
      * Authorize and handle an incoming Telegram callback query, then dispatch the selected action.
      *
-     * Processes callback data for disk selection (`set_disk:{idx}`), category download confirmation (`dl:{category}`),
-     * and TorrServer interactions (`ts_dl:{hash}`, `ts_ignore:{hash}`). It enforces authorization (allowed users or the
-     * owner of a pending download), validates session freshness for TorrServer callbacks, updates pending download state
-     * for disk selection, edits or deletes the originating message as appropriate, initiates download finalization, and
-     * records or clears TorrServer notification state.
+     * Processes callback data for:
+     * - Disk selection (`set_disk:{idx}`): Updates the pending download's target disk and refreshes the destination keyboard.
+     * - Category confirmation (`dl:{category}`): Finalizes the download to the constructed path.
+     * - TorrServer download (`ts_dl:{hash}`): Initiates a magnet download from TorrServer.
+     * - TorrServer ignore (`ts_ignore:{hash}`): Marks a hash as seen to prevent future polling notifications.
+     * 
+     * Authorization logic:
+     * - Users must either be in `allowed_user_ids` or be the owner of the `pendingDownloads` session for that chat.
+     * - Session freshness is verified for TorrServer callbacks to prevent duplicate processing.
      *
-     * @param array $cb The callback query object. Expected keys:
-     *                  - 'id' (string) callback query id for answering
-     *                  - 'data' (string) callback payload (prefixes: 'set_disk:', 'dl:', 'ts_dl:', 'ts_ignore:')
-     *                  - 'from' => ['id' => int] the invoking user id
-     *                  - 'message' => [
-     *                      'chat' => ['id' => int],
-     *                      'message_id' => int,
-     *                      optionally 'photo' when the original message is a photo,
-     *                      ...additional Telegram message fields consumed by downstream handlers
-     *                    ]
+     * @param array $cb The callback query object from Telegram.
      */
     private function handleCallback(array $cb): void
     {
@@ -840,15 +873,18 @@ final class QBittorrentBot
     }
 
     /**
-         * Finalizes a pending download request for a chat by performing the selected action and notifying the chat.
-         *
-         * Supports three outcomes: add a magnet to qBittorrent, start or queue a yt-dlp job, or retrieve a Telegram file/media
-         * and place it in the specified destination directory. When a status message is sent successfully, it is scheduled
-         * for later deletion according to the configured notification cleanup time.
-         *
-         * @param int $chatId Telegram chat identifier that owns the pending download.
-         * @param string $dir Destination directory where the downloaded content should be saved.
-         */
+     * Finalizes a pending download request for a chat by performing the selected action and notifying the user.
+     *
+     * Depending on the session type, this method will:
+     * - `magnet`: Add the magnet URL to qBittorrent and optionally enforce speed limits for TorrServer sources.
+     * - `ytdlp`: Start or queue a background yt-dlp job.
+     * - `file`/`video`/`photo`: Download the media from Telegram servers and either add it as a torrent or move it to destination.
+     * 
+     * On success, a notification is sent to the chat and scheduled for automatic deletion if cleanup is enabled.
+     *
+     * @param int $chatId Telegram chat identifier that owns the pending download.
+     * @param string $dir Target filesystem directory for the download.
+     */
     private function finalizeDownload(int $chatId, string $dir): void
     {
         $p = $this->pendingDownloads[$chatId] ?? null;
