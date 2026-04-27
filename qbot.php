@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.19';
+const QBOT_VERSION = '1.2.20';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -1600,6 +1600,24 @@ final class QBittorrentBot
         }
         $this->torrServerFailCount = 0;
 
+        // Prune notifiedTorrHashes and torrServerMsgIds against the live TorrServer hash list
+        // to prevent unbounded growth in long-running deployments.
+        $liveHashes = array_column($torrents, 'hash');
+        $liveHashSet = array_flip($liveHashes);
+
+        $beforeNotified = count($this->notifiedTorrHashes);
+        $this->notifiedTorrHashes = array_values(array_filter(
+            $this->notifiedTorrHashes,
+            fn($h) => isset($liveHashSet[$h])
+        ));
+        $beforeMsgIds = count($this->torrServerMsgIds);
+        $this->torrServerMsgIds = array_intersect_key($this->torrServerMsgIds, $liveHashSet);
+
+        if (count($this->notifiedTorrHashes) !== $beforeNotified || count($this->torrServerMsgIds) !== $beforeMsgIds) {
+            $this->logger->info("Pruned TorrServer state: notifiedTorrHashes {$beforeNotified} -> " . count($this->notifiedTorrHashes) . ", torrServerMsgIds {$beforeMsgIds} -> " . count($this->torrServerMsgIds));
+            $this->saveState();
+        }
+
         $this->logger->info("Found " . count($torrents) . " torrents in TorrServer.");
 
         foreach ($torrents as $t) {
@@ -1735,7 +1753,7 @@ final class QBittorrentBot
 
     /**
      * Checks torrents in the pendingLimits queue and applies their download limits.
-     * Removes them from the queue on success or after 10 attempts.
+     * Removes them from the queue on success or after MAX_PENDING_LIMIT_ATTEMPTS (currently 5) attempts.
      */
     private function checkPendingLimits(): void
     {
