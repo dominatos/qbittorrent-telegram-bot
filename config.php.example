@@ -13,10 +13,10 @@ return [
     ],
 
     // File to store bot state (relative to script or absolute path)
-    'state_file' => __DIR__ . '/bot_state.json',
+    'state_file' => __DIR__ . '/data/bot_state.json',
 
     // Log file path
-    'log_file' => __DIR__ . '/bot.log',
+    'log_file' => __DIR__ . '/data/bot.log',
 
     // Mount points or disk paths
     'disks' => [
@@ -30,7 +30,10 @@ return [
     'qb_user' => 'admin',
     'qb_pass' => 'xxxxxxx',
     
-    // Action on torrent completion: 'stop', 'pause', 'remove'
+    // Action on torrent completion: 
+    // 'stop' or 'pause' => Pauses the torrent (leaves it in qBittorrent list)
+    // 'remove' => Removes torrent from qBittorrent but keeps downloaded files
+    // 'remove_data' => Removes torrent AND deletes downloaded files
     'action_on_complete' => 'stop',
 
     // Download categories/subdirectories
@@ -42,7 +45,8 @@ return [
         'download-pc' => '📁 Other',
         'Music' => '🎵 Music',
         'photo' => '🖼 Photo',
-        'cartoni' => '🧸 Cartoni'
+        'cartoni' => '🧸 Cartoni',
+        'vidcontent' => '🎬 YouTube and others'
     ],
 
     // Timings (in seconds)
@@ -55,4 +59,53 @@ return [
     // Status command display options
     'status_show_limit' => 10,      // Max torrents to show in /status (0 = unlimited)
     'status_filter' => 'all',       // 'all' = show all torrents, 'downloading' = only active downloads
+
+    // TorrServer Settings
+    'torrserver_enabled' => false,
+    'torrserver_url' => 'http://127.0.0.1:8090',
+    'torrserver_check_interval' => 60,
+    'torrserver_user' => '', // Add if auth is enabled
+    'torrserver_pass' => '', // Add if auth is enabled
+    'torrserver_dl_limit_mbit' => 100, // Download speed limit in Mbit/s for TorrServer downloads
+
+    // yt-dlp Settings
+    // Ensure 'ytdlp_enabled' is true to use this feature.
+    // By default, 'ytdlp_binary' relies on the system PATH. If yt-dlp is installed elsewhere
+    // (e.g., ~/.local/bin/yt-dlp or /usr/local/bin/yt-dlp), provide the absolute path.
+    // Additional parameters can be passed using 'ytdlp_extra_args'.
+    'ytdlp_enabled' => false,
+    'ytdlp_max_concurrent' => 2, // Maximum concurrent yt-dlp downloads (0 = unlimited)
+    'ytdlp_binary' => 'yt-dlp',
+    'ytdlp_format' => 'bestvideo[height<=1080]+bestaudio/best[height<=1080]', // yt-dlp format selection
+    // Additional yt-dlp arguments. For YouTube, cookies and JS challenge solvers are highly recommended:
+    'ytdlp_extra_args' => [
+        // '--cookies', __DIR__ . '/data/cookies.txt',
+        // '--remote-components', 'ejs:github'
+    ],
+    // URL domain allowlist for yt-dlp detection
+    // Add or remove domains as needed. Must match the hostname part of the URL.
+    'ytdlp_domains' => [
+        'youtube.com',
+        'youtu.be',
+        'www.youtube.com',
+        'm.youtube.com',
+        'music.youtube.com',
+        'vimeo.com',
+        'twitter.com',
+        'x.com',
+        'instagram.com',
+        'tiktok.com',
+        'www.tiktok.com',
+        'reddit.com',
+        'www.reddit.com',
+        'twitch.tv',
+        'www.twitch.tv',
+        'dailymotion.com',
+        'www.dailymotion.com',
+    ],
+
+    // Jellyfin Settings (trigger library refresh after yt-dlp downloads)
+    'jellyfin_enabled' => false,
+    'jellyfin_url' => 'http://127.0.0.1:8096',
+    'jellyfin_api_key' => '',  // Get from Jellyfin Dashboard → API Keys
 ];

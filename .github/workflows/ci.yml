@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks (secret scanning)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  php-lint:
+    name: PHP Syntax Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1' # Minimum recommended PHP version for this bot
+          extensions: curl, json, mbstring
+          coverage: none
+
+      - name: Syntax check (Lint) PHP files
+        run: |
+          echo "Checking PHP syntax..."
+          find . -name "*.php" -type f -print0 | xargs -0 -n1 php -l
+          
+      - name: Verify required files exist
+        run: |
+          required_files=(
+            "qbot.php"
+            "config.php.example"
+            "README.md"
+            "README-yt-dlp.md"
+            "docker-compose.yml"
+          )
+          for f in "${required_files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "ERROR: Missing required file: $f"
+              exit 1
+            fi
+          done
+          echo "All required files are present."
