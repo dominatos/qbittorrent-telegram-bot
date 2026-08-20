@@ -12,7 +12,7 @@ A lightweight, self-hosted Telegram bot for managing qBittorrent downloads. Send
 ## ✨ Features
 
 - 📥 **Add Torrents**: Send magnet links or `.torrent` files
-- 🎬 **yt-dlp Downloads**: Send YouTube/Vimeo/Twitter/etc. URLs for direct video downloads
+- 🎬 **yt-dlp Downloads**: Send YouTube/Vimeo/Twitter/etc. URLs for direct video or audio downloads. See the [yt-dlp Setup Guide](README-yt-dlp.md) for important configuration steps.
 - 📁 **Smart Organization**: Interactive disk selection showing **Available Space**
 - 📊 **Status Tracking**: Real-time download monitoring with `/status`
 - 🔔 **Notifications**: Automatic alerts on completion
@@ -179,7 +179,7 @@ The bot integrates with [TorrServer](https://github.com/YouROK/TorrServer) to mo
 
 ## 🎬 yt-dlp Integration
 
-The bot supports downloading videos from YouTube, Vimeo, Twitter/X, and many other platforms via [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+The bot supports downloading videos and extracting audio from YouTube, Vimeo, Twitter/X, and many other platforms via [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 ### Features
 - **Multi-Platform**: YouTube, Vimeo, Twitter/X, Instagram, TikTok, Reddit, Twitch, Dailymotion and more
@@ -245,7 +245,7 @@ YouTube frequently blocks anonymous `yt-dlp` requests with a "Sign in to confirm
 
 1. **Send a magnet link** → Bot prompts for disk/category
 2. **Upload a `.torrent` file** → Same interactive selection
-3. **Send a video URL** (YouTube, Vimeo, etc.) → Same interactive selection, downloads via yt-dlp
+3. **Send a video URL** (YouTube, Vimeo, etc.) → Prompts for format (Video/Audio), then destination selection, downloads via yt-dlp
 4. **Check status**: Send `/status` to see active downloads
 5. **Completion**: Bot notifies when downloads finish
 

@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.22';
+const QBOT_VERSION = '1.2.23';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -19,12 +19,12 @@ ini_set('memory_limit', '256M');
 interface LoggerInterface
 {
     /**
- * Record an error-level log entry.
- *
- * Appends the given message (prefixed with a timestamp and an `ERROR` level tag) to the configured log and writes it to stdout.
- *
- * @param string $msg The error message to record.
- */
+     * Record an error-level log entry.
+     *
+     * Appends the given message (prefixed with a timestamp and an `ERROR` level tag) to the configured log and writes it to stdout.
+     *
+     * @param string $msg The error message to record.
+     */
     public function error(string $msg): void;
 
     /**
@@ -398,15 +398,15 @@ final class QBittorrentBot
     }
 
     /**
-         * Sends a photo to the specified Telegram chat with an optional caption and reply markup.
-         *
-         * @param int $chatId Target chat identifier.
-         * @param string $photo Telegram `file_id`, an HTTP URL, or a multipart upload reference identifying the photo.
-         * @param string $caption Caption text to include with the photo.
-         * @param string|null $parseMode Optional parse mode for the caption (e.g., "MarkdownV2" or "HTML").
-         * @param array|null $replyMarkup Optional reply markup array (inline keyboard / reply markup).
-         * @return mixed The decoded Telegram API `result` on success, or `null` on failure.
-         */
+     * Sends a photo to the specified Telegram chat with an optional caption and reply markup.
+     *
+     * @param int $chatId Target chat identifier.
+     * @param string $photo Telegram `file_id`, an HTTP URL, or a multipart upload reference identifying the photo.
+     * @param string $caption Caption text to include with the photo.
+     * @param string|null $parseMode Optional parse mode for the caption (e.g., "MarkdownV2" or "HTML").
+     * @param array|null $replyMarkup Optional reply markup array (inline keyboard / reply markup).
+     * @return mixed The decoded Telegram API `result` on success, or `null` on failure.
+     */
     private function tgSendPhoto(int $chatId, string $photo, string $caption, ?string $parseMode = null, ?array $replyMarkup = null): mixed
     {
         $params = ['chat_id' => $chatId, 'photo' => $photo, 'caption' => $caption];
@@ -449,6 +449,26 @@ final class QBittorrentBot
         }
         $buttons[] = $diskRow;
         return ['inline_keyboard' => $buttons];
+    }
+
+    /**
+     * Builds an inline Telegram keyboard for yt-dlp format selection.
+     *
+     * Returns a keyboard with two buttons: one for downloading a video and one for downloading just the audio.
+     * Callbacks use `yt_fmt:video` and `yt_fmt:audio`.
+     *
+     * @return array The Telegram inline keyboard payload.
+     */
+    private function tgYtdlpFormatKeyboard(): array
+    {
+        return [
+            'inline_keyboard' => [
+                [
+                    ['text' => '🎬 Video', 'callback_data' => 'yt_fmt:video'],
+                    ['text' => '🎵 Audio', 'callback_data' => 'yt_fmt:audio']
+                ]
+            ]
+        ];
     }
 
     /**
@@ -604,7 +624,7 @@ final class QBittorrentBot
 
         if (($this->config['ytdlp_enabled'] ?? false) && $this->isYtdlpUrl($text)) {
             $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
-            $this->tgSendMessage($chatId, "🎬 Video URL detected. Choose destination:", 'Markdown', $this->tgCategoryKeyboard($this->config['default_disk_idx']));
+            $this->tgSendMessage($chatId, "🎬 URL detected. Choose format:", 'Markdown', $this->tgYtdlpFormatKeyboard());
             return;
         }
 
@@ -688,8 +708,8 @@ final class QBittorrentBot
             return;
         }
 
-        // Verify authorization for dl / set_disk
-        if (str_starts_with($data, 'set_disk:') || str_starts_with($data, 'dl:')) {
+        // Verify authorization for dl / set_disk / yt_fmt
+        if (str_starts_with($data, 'set_disk:') || str_starts_with($data, 'dl:') || str_starts_with($data, 'yt_fmt:')) {
             if (!isset($this->pendingDownloads[$chatId])) {
                 $this->logger->warning("Callback ($data) rejected: no pending download for chat $chatId.");
                 $this->tgApiRequest('answerCallbackQuery', ['callback_query_id' => $cb['id'], 'text' => "No pending download or session expired.", 'show_alert' => true]);
@@ -757,6 +777,23 @@ final class QBittorrentBot
                 ]);
             }
             $this->logger->info("set_disk updated message.");
+        } elseif (str_starts_with($data, 'yt_fmt:')) {
+            $format = substr($data, 7);
+            if ($format !== 'video' && $format !== 'audio') {
+                $this->logger->error("handleCallback aborted: unknown yt_fmt format $format");
+                return;
+            }
+            $this->pendingDownloads[$chatId]['ytdlp_format'] = $format;
+            $idx = $this->pendingDownloads[$chatId]['disk_idx'] ?? $this->config['default_disk_idx'];
+
+            $fmtLabel = $format === 'audio' ? '🎵 Audio' : '🎬 Video';
+            $this->tgApiRequest('editMessageText', [
+                'chat_id' => $chatId,
+                'message_id' => $cb['message']['message_id'],
+                'text' => "Format: {$fmtLabel}\nChoose destination:",
+                'reply_markup' => json_encode($this->tgCategoryKeyboard($idx))
+            ]);
+            $this->logger->info("yt_fmt selected ($format), updated message.");
         } elseif (str_starts_with($data, 'dl:')) {
             $sub = substr($data, 3);
             if (!isset($this->config['categories'][$sub])) {
@@ -941,7 +978,8 @@ final class QBittorrentBot
                 $msgText = "❌ Failed to add magnet to qBit. Check bot.log for details.";
             }
         } elseif ($p['type'] === 'ytdlp') {
-            $result = $this->startYtdlpDownload($p['url'], $dir, $chatId);
+            $formatType = $p['ytdlp_format'] ?? 'video';
+            $result = $this->startYtdlpDownload($p['url'], $dir, $chatId, $formatType);
             if ($result === 'queued') {
                 $msgText = "⏳ yt-dlp download queued.\nURL: `" . $p['url'] . "`\nDir: `{$dir}`";
                 $success = true;
@@ -1050,16 +1088,16 @@ final class QBittorrentBot
     }
 
     /**
-         * Start a background yt-dlp job to download the given URL into the specified directory and track the job for later completion.
-         *
-         * If concurrency limits are reached the job is enqueued; otherwise the yt-dlp process is started, its metadata is recorded in bot state and persisted so completion can be monitored and notifications delivered to the originating chat.
-         *
-         * @param string $url The yt-dlp-allowed URL to download.
-         * @param string $dir Destination directory where yt-dlp will write files.
-         * @param int $chatId Telegram chat ID to attribute the job to for notifications.
-         * @return bool|string `true` if the yt-dlp process was started, `'queued'` if the job was enqueued due to concurrency limits, `false` on failure.
-         */
-    private function startYtdlpDownload(string $url, string $dir, int $chatId): bool|string
+     * Start a background yt-dlp job to download the given URL into the specified directory and track the job for later completion.
+     *
+     * If concurrency limits are reached the job is enqueued; otherwise the yt-dlp process is started, its metadata is recorded in bot state and persisted so completion can be monitored and notifications delivered to the originating chat.
+     *
+     * @param string $url The yt-dlp-allowed URL to download.
+     * @param string $dir Destination directory where yt-dlp will write files.
+     * @param int $chatId Telegram chat ID to attribute the job to for notifications.
+     * @return bool|string `true` if the yt-dlp process was started, `'queued'` if the job was enqueued due to concurrency limits, `false` on failure.
+     */
+    private function startYtdlpDownload(string $url, string $dir, int $chatId, string $formatType = 'video'): bool|string
     {
         $max = $this->config['ytdlp_max_concurrent'] ?? 0;
         if ($max > 0 && count($this->ytdlpProcesses) >= $max) {
@@ -1068,6 +1106,7 @@ final class QBittorrentBot
                 'chat_id' => $chatId,
                 'url' => $url,
                 'dir' => $dir,
+                'format' => $formatType,
                 'queued' => time()
             ];
             $this->saveState(); // Persist queue
@@ -1091,14 +1130,22 @@ final class QBittorrentBot
 
         $cmd = [
             $binary,
-            '-f',
-            $format,
             '-o',
             $dir . '/%(title)s.%(ext)s',
             '--no-playlist',
-            '--newline',
-            '--restrict-filenames'
+            '--newline'
         ];
+
+        if ($formatType === 'audio') {
+            $cmd[] = '-f';
+            $cmd[] = 'bestaudio';
+            $cmd[] = '--extract-audio';
+            $cmd[] = '--audio-format';
+            $cmd[] = 'mp3';
+        } else {
+            $cmd[] = '-f';
+            $cmd[] = $format;
+        }
 
         foreach ($extraArgs as $arg) {
             if (is_scalar($arg)) {
@@ -1121,7 +1168,16 @@ final class QBittorrentBot
             2 => ['file', $logFile, 'a']
         ];
 
-        $proc = proc_open($cmd, $descriptors, $pipes, null, null, ['bypass_shell' => true]);
+        $env = $_ENV;
+        if (empty($env['PATH'])) {
+            $env['PATH'] = getenv('PATH') ?: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+        }
+
+        $nodeCheck = shell_exec('PATH=' . escapeshellarg($env['PATH']) . ' node -v 2>&1');
+        $this->logger->info("Node check output: " . trim($nodeCheck));
+        $this->logger->info("PATH is: " . $env['PATH']);
+
+        $proc = proc_open($cmd, $descriptors, $pipes, null, $env, ['bypass_shell' => true]);
         if (!is_resource($proc)) {
             $this->logger->error("Failed to start yt-dlp process via proc_open.");
             return false;
@@ -1255,8 +1311,10 @@ final class QBittorrentBot
                 $this->jellyfinRefreshLibrary();
             }
 
-            // Clean up log file
-            @unlink($proc['log_file']);
+            // Clean up log file only on success
+            if (!$hasError) {
+                @unlink($proc['log_file']);
+            }
             unset($this->ytdlpProcesses[$k]);
         }
         if (count($this->ytdlpProcesses) !== $initialCount) {
@@ -1271,7 +1329,8 @@ final class QBittorrentBot
             while (!empty($this->ytdlpQueue) && count($this->ytdlpProcesses) < $max) {
                 $next = array_shift($this->ytdlpQueue);
                 $queueShifted = true;
-                $res = $this->startYtdlpDownload($next['url'], $next['dir'], $next['chat_id']);
+                $formatType = $next['format'] ?? 'video';
+                $res = $this->startYtdlpDownload($next['url'], $next['dir'], $next['chat_id'], $formatType);
                 if ($res === true) {
                     $this->tgSendMessage($next['chat_id'], "⬇️ Dequeued and started yt-dlp download.\nURL: `" . $next['url'] . "`\nDir: `{$next['dir']}`", 'Markdown');
                 } else {
@@ -1381,8 +1440,10 @@ final class QBittorrentBot
                 $this->jellyfinRefreshLibrary();
             }
 
-            // Clean up log file
-            @unlink($proc['log_file']);
+            // Clean up log file only on success
+            if (!$hasError) {
+                @unlink($proc['log_file']);
+            }
         }
 
         $this->ytdlpProcesses = $stillActive;
@@ -1767,14 +1828,14 @@ final class QBittorrentBot
     }
 
     /**
-         * Remove TorrServer notification messages for a torrent hash from all chats except the acting chat.
-         *
-         * Deletes recorded Telegram messages for the given TorrServer torrent hash that were sent to other chats
-         * and clears the internal per-hash message tracking entry.
-         *
-         * @param string $hash The TorrServer torrent hash whose notification messages should be removed.
-         * @param int $actingChatId The chat ID to exclude from deletion.
-         */
+     * Remove TorrServer notification messages for a torrent hash from all chats except the acting chat.
+     *
+     * Deletes recorded Telegram messages for the given TorrServer torrent hash that were sent to other chats
+     * and clears the internal per-hash message tracking entry.
+     *
+     * @param string $hash The TorrServer torrent hash whose notification messages should be removed.
+     * @param int $actingChatId The chat ID to exclude from deletion.
+     */
     private function deleteOtherTorrServerMessages(string $hash, int $actingChatId): void
     {
         if (empty($this->torrServerMsgIds[$hash])) {
@@ -1793,16 +1854,16 @@ final class QBittorrentBot
     }
 
     /**
-         * Apply queued download limits to torrents and prune entries on success or repeated failure.
-         *
-         * Iterates the internal `pendingLimits` map and, for each entry whose `next_attempt`
-         * has passed, increments its attempt counter, schedules the next attempt (+5s),
-         * verifies the torrent is present in qBittorrent, and attempts to apply the stored
-         * download limit. Removes the entry if the limit is successfully applied or if the
-         * attempts reach `MAX_PENDING_LIMIT_ATTEMPTS`. Logs informational and warning messages
-         * when limits are applied or when an entry is abandoned. When any entry is changed,
-         * marks the state for saving by resetting `lastSave`.
-         */
+     * Apply queued download limits to torrents and prune entries on success or repeated failure.
+     *
+     * Iterates the internal `pendingLimits` map and, for each entry whose `next_attempt`
+     * has passed, increments its attempt counter, schedules the next attempt (+5s),
+     * verifies the torrent is present in qBittorrent, and attempts to apply the stored
+     * download limit. Removes the entry if the limit is successfully applied or if the
+     * attempts reach `MAX_PENDING_LIMIT_ATTEMPTS`. Logs informational and warning messages
+     * when limits are applied or when an entry is abandoned. When any entry is changed,
+     * marks the state for saving by resetting `lastSave`.
+     */
     private function checkPendingLimits(): void
     {
         $changed = false;
