@@ -46,7 +46,6 @@ jobs:
           required_files=(
             "qbot.php"
             "config.php.example"
-            "update.sh"
             "README.md"
             "README-yt-dlp.md"
             "docker-compose.yml"
