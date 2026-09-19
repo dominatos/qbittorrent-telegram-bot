@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.23';
+const QBOT_VERSION = '1.2.24';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -1909,6 +1909,18 @@ final class QBittorrentBot
     public function run(): void
     {
         $this->logger->info("Bot v" . QBOT_VERSION . " started.");
+        
+        foreach ($this->config['disks'] as $idx => $disk) {
+            if (!is_dir($disk) || !is_readable($disk) || !is_writable($disk)) {
+                $warning = "⚠️ Warning: Disk $disk is not accessible on boot. It has been excluded from choices.";
+                $this->logger->error($warning);
+                foreach ($this->config['allowed_user_ids'] as $adminId) {
+                    $this->tgSendMessage((int) $adminId, $warning);
+                }
+                unset($this->config['disks'][$idx]);
+            }
+        }
+
         while (true) {
             try {
                 $updates = $this->tgApiRequest('getUpdates', ['offset' => $this->offset + 1, 'timeout' => $this->config['poll_timeout']]);
