@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.24';
+const QBOT_VERSION = '1.2.25';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -1607,17 +1607,22 @@ final class QBittorrentBot
                 continue;
 
             $action = strtolower(trim((string) ($this->config['action_on_complete'] ?? 'stop')));
+            $actionMsg = "";
             if (in_array($action, ['remove_data', 'delete_data'])) {
                 $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'true'], true);
+                $actionMsg = " (Removed with data)";
             } elseif (in_array($action, ['remove', 'delete'])) {
                 $this->qbRequest('/api/v2/torrents/delete', ['hashes' => $t['hash'], 'deleteFiles' => 'false'], true);
+                $actionMsg = " (Removed from list)";
             } else {
                 $this->qbRequest('/api/v2/torrents/pause', ['hashes' => $t['hash']], true);
+                $actionMsg = " (Paused)";
             }
 
             foreach ($this->knownChatIds as $cid) {
                 $safeName = $this->escapeMarkdown($t['name']);
-                $this->tgSendMessage($cid, "✅ *Finished:* `{$safeName}`", 'Markdown');
+                $safeActionMsg = $this->escapeMarkdown($actionMsg);
+                $this->tgSendMessage($cid, "✅ *Finished:* `{$safeName}`{$safeActionMsg}", 'Markdown');
             }
             $this->notifiedTorrentIds[$t['hash']] = time();
             $this->saveState();
@@ -1816,13 +1821,13 @@ final class QBittorrentBot
                     $delivered = true;
                 }
             }
-
+            $this->notifiedTorrHashes[] = $hash;
+            $this->saveState();
+            
             if ($delivered) {
-                $this->notifiedTorrHashes[] = $hash;
-                $this->saveState();
                 $this->logger->info("Saved state for hash $hash");
             } else {
-                $this->logger->error("Skipped saving hash $hash as all notifications failed.");
+                $this->logger->error("All notifications failed for hash $hash, but saved state to prevent infinite loops.");
             }
         }
     }

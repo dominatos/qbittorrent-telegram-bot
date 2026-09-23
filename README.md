@@ -305,6 +305,12 @@ chmod 644 data/bot_state.json
 - **Docker**: Ensure volumes are correctly mapped in `docker-compose.yml`
 - **Verify paths** in `config.php` match your system
 
+### No TorrServer Notifications After Restart
+
+If you deleted `data/bot_state.json` or started the bot with a fresh state, the bot won't know which Telegram chats to send TorrServer notifications to. The state file stores your chat IDs from previous interactions.
+
+**Fix**: Send `/status` (or any message) to the bot in Telegram. This registers your chat ID. TorrServer notifications will work on the next polling cycle.
+
 
 ## 📁 Project Structure
 
