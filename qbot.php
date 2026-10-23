@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.25';
+const QBOT_VERSION = '1.2.26';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -504,13 +504,27 @@ final class QBittorrentBot
         $header = substr((string) $resp, 0, $headerSize);
         curl_close($ch);
 
+        // Handle no-auth mode: qBittorrent auth is disabled, no SID cookie is issued
+        if ($code === 204) {
+            $this->qbCookie = 'noauth';
+            $this->logger->info("qBittorrent returned 204 — authentication is disabled. Proceeding without session cookie.");
+            return true;
+        }
+
         if (preg_match('/set-cookie:\s*(SID=[^;\s]+)/i', $header, $matches)) {
             $this->qbCookie = $matches[1];
             $this->logger->info("qBittorrent login successful. Cookie set.");
             return true;
         }
 
-        $this->logger->error("qBittorrent login failed. HTTP Code: $code. Response: " . substr((string) $resp, $headerSize));
+        $body = substr((string) $resp, $headerSize);
+        if (str_contains($body, 'Fails.')) {
+            $this->logger->error("qBittorrent login failed: Wrong username or password.");
+        } elseif (str_contains($body, 'Banned.')) {
+            $this->logger->error("qBittorrent login failed: IP banned due to too many failed attempts.");
+        } else {
+            $this->logger->error("qBittorrent login failed. HTTP Code: $code. Response: " . $body);
+        }
         return false;
     }
 
@@ -536,11 +550,15 @@ final class QBittorrentBot
         $this->logger->info("qbRequest: $endpoint " . ($isPost ? "POST" : "GET") . " params: " . json_encode($params));
 
         $ch = curl_init($url . (!$isPost ? '?' . http_build_query($params) : ''));
-        curl_setopt_array($ch, [
+        $curlOpts = [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_COOKIE => $this->qbCookie,
-            CURLOPT_TIMEOUT => 15
-        ]);
+            CURLOPT_TIMEOUT        => 15,
+        ];
+        // Only send session cookie when a real SID is present (not in no-auth mode)
+        if ($this->qbCookie !== 'noauth') {
+            $curlOpts[CURLOPT_COOKIE] = $this->qbCookie;
+        }
+        curl_setopt_array($ch, $curlOpts);
         if ($isPost) {
             curl_setopt($ch, CURLOPT_POST, true);
             if ($isFile) {
