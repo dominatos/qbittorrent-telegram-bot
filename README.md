@@ -274,7 +274,11 @@ chmod 644 data/bot_state.json
 3. **Docker networking**: Use `host.docker.internal` instead of `127.0.0.1` on macOS/Windows
 4. **Firewall**: Ensure port 8080 is accessible
 5. **Authentication disabled (HTTP 204 error)**:
-   If your log shows `qBittorrent login failed. HTTP Code: 204` followed by `qbRequest failed: No login cookie`, your qBittorrent has authentication **disabled**. The bot requires authentication to obtain a session cookie.
+   If your log shows `qBittorrent login failed. HTTP Code: 204` followed by `qbRequest failed: No login cookie`, this can have two causes on bot v1.2.25 and earlier:
+   - **Authentication is disabled** in qBittorrent (no session cookie is issued at all), or
+   - **Newer qBittorrent** (5.x+) returns HTTP 204 with a `QBT_SID_<port>=` cookie instead of `SID=`, which older bot versions did not recognise.
+
+   **Recommended fix:** Upgrade the bot to v1.2.26+, which handles both cases correctly. If you cannot upgrade, use the workaround below.
 
    **Workaround (v1.2.25 and earlier):** Enable authentication in qBittorrent:
    - Open qBittorrent → **Tools → Options → Web UI**
