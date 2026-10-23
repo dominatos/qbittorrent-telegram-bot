@@ -288,7 +288,7 @@ chmod 644 data/bot_state.json
      ```
    - Restart the bot
 
-   > **Note:** As of v1.2.26, no-auth mode is supported natively — the bot detects HTTP 204 and proceeds without a session cookie.
+   > **Note:** As of v1.2.26, the bot inspects the response headers for a session cookie first (including `QBT_SID_<port>=` used by newer qBittorrent versions). Only if HTTP 204 is returned **without** a session cookie is bypass mode activated — all requests then proceed without a cookie.
 
 ### Bot Not Responding
 

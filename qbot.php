@@ -504,16 +504,17 @@ final class QBittorrentBot
         $header = substr((string) $resp, 0, $headerSize);
         curl_close($ch);
 
-        // Handle no-auth mode: qBittorrent auth is disabled, no SID cookie is issued
-        if ($code === 204) {
-            $this->qbCookie = 'noauth';
-            $this->logger->info("qBittorrent returned 204 — authentication is disabled. Proceeding without session cookie.");
+        // Extract session cookie first — qBittorrent may use SID= or QBT_SID_<port>= depending on version/config
+        if (preg_match('/set-cookie:\s*((QBT_SID[^=]*|SID)=[^;\s]+)/i', $header, $matches)) {
+            $this->qbCookie = $matches[1];
+            $this->logger->info("qBittorrent login successful. Cookie set.");
             return true;
         }
 
-        if (preg_match('/set-cookie:\s*(SID=[^;\s]+)/i', $header, $matches)) {
-            $this->qbCookie = $matches[1];
-            $this->logger->info("qBittorrent login successful. Cookie set.");
+        // HTTP 204 with no session cookie means authentication is disabled (bypass mode)
+        if ($code === 204) {
+            $this->qbCookie = 'noauth';
+            $this->logger->info("qBittorrent returned 204 with no session cookie — authentication bypass mode. Proceeding without cookie.");
             return true;
         }
 
