@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.26';
+const QBOT_VERSION = '1.2.27';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -532,14 +532,14 @@ final class QBittorrentBot
     /**
      * Send an authenticated request to the qBittorrent WebAPI and return its response.
      *
-     * Ensures a valid qBittorrent session cookie (attempting login if missing), retries once on HTTP 403 by re-establishing the session, and treats only HTTP 200/201 responses as successful.
+     * Ensures a valid qBittorrent session cookie (attempting login if missing), retries once on HTTP 403 by re-establishing the session, and treats HTTP 200, 201, and 204 responses as successful.
      *
      * @param string $endpoint API endpoint path appended to the configured qBittorrent base URL.
      * @param array $params Query parameters for GET or body parameters for POST.
      * @param bool $isPost If true, use POST; otherwise use GET.
      * @param bool $isFile When true and using POST, send $params as multipart/form-data (for file uploads); otherwise encode as application/x-www-form-urlencoded.
      * @param bool $hasRetried Internal flag to prevent repeated re-login attempts when a 403 has already been retried.
-     * @return mixed Decoded JSON as an associative array when JSON decodes to a truthy value, the raw response string when HTTP 200/201 but JSON decode is falsy, or `null` on HTTP errors, cURL failures, or non-200/201 responses.
+     * @return mixed Decoded JSON as an associative array when JSON decodes to a truthy value, the raw response string when HTTP 200/201/204 but JSON decode is falsy, or `null` on HTTP errors, cURL failures, or non-200/201/204 responses.
      */
     private function qbRequest(string $endpoint, array $params = [], bool $isPost = false, bool $isFile = false, bool $hasRetried = false)
     {
@@ -589,7 +589,8 @@ final class QBittorrentBot
         }
 
         $this->logger->info("qbRequest $endpoint returned code $code");
-        if (in_array($code, [200, 201])) {
+        // qBittorrent 4.x: POST actions return 200; qBittorrent 5.2+: POST actions with no body return 204.
+        if (in_array($code, [200, 201, 204])) {
             $decoded = json_decode((string) $res, true);
             return json_last_error() === JSON_ERROR_NONE ? $decoded : $res;
         }
