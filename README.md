@@ -276,11 +276,12 @@ chmod 644 data/bot_state.json
 5. **Authentication disabled (HTTP 204 error)**:
    If your log shows `qBittorrent login failed. HTTP Code: 204` followed by `qbRequest failed: No login cookie`, this can have two causes on bot v1.2.25 and earlier:
    - **Authentication is disabled** in qBittorrent (no session cookie is issued at all), or
-   - **Newer qBittorrent** (5.x+) returns HTTP 204 with a `QBT_SID_<port>=` cookie instead of `SID=`, which older bot versions did not recognise.
+   - **Some qBittorrent 5.x releases** return HTTP 204 with a `QBT_SID_<port>=` cookie instead of `SID=`, which older bot versions did not recognise.
 
-   **Recommended fix:** Upgrade the bot to v1.2.26+, which handles both cases correctly. If you cannot upgrade, use the workaround below.
+   **Recommended fix:** Upgrade the bot to v1.2.26+, which handles both cases correctly.
 
-   **Workaround (v1.2.25 and earlier):** Enable authentication in qBittorrent:
+   **Workaround — auth disabled only (v1.2.25 and earlier):**
+   If authentication is genuinely disabled and you cannot upgrade, enable it in qBittorrent:
    - Open qBittorrent → **Tools → Options → Web UI**
    - Uncheck **"Bypass authentication for clients on localhost"** (if checked)
    - Ensure a username and password are set
@@ -292,7 +293,9 @@ chmod 644 data/bot_state.json
      ```
    - Restart the bot
 
-   > **Note:** As of v1.2.26, the bot inspects the response headers for a session cookie first (including `QBT_SID_<port>=` used by newer qBittorrent versions). Only if HTTP 204 is returned **without** a session cookie is bypass mode activated — all requests then proceed without a cookie.
+   > **Note:** If your qBittorrent authentication *is* enabled but uses a `QBT_SID_<port>=` session cookie (some 5.x releases), enabling authentication will not help — upgrade to v1.2.26+ instead.
+
+   > **v1.2.26+:** The bot inspects response headers for any session cookie (`SID=` or `QBT_SID_<port>=`) before checking the status code. HTTP 204 without a session cookie activates bypass mode; HTTP 204 with a cookie is treated as a normal authenticated session.
 
 ### Bot Not Responding
 
