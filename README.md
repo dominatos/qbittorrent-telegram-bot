@@ -273,6 +273,7 @@ chmod 644 data/bot_state.json
 2. **Verify credentials** in `config.php`
 3. **Docker networking**: Use `host.docker.internal` instead of `127.0.0.1` on macOS/Windows
 4. **Firewall**: Ensure port 8080 is accessible
+5. **Authentication disabled**: If qBittorrent returns HTTP 204 (auth disabled in Settings → Web UI → Authentication), the bot handles this automatically as of v1.2.26 — no SID cookie is required and all requests proceed without one.
 
 ### Bot Not Responding
 
