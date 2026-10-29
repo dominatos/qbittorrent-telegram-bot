@@ -4,7 +4,7 @@
 // https://github.com/dominatos/qbittorrent-telegram-bot
 declare(strict_types=1);
 
-const QBOT_VERSION = '1.2.27';
+const QBOT_VERSION = '1.2.28';
 const MAX_PENDING_LIMIT_ATTEMPTS = 5;
 
 if (php_sapi_name() !== 'cli') {
@@ -642,10 +642,13 @@ final class QBittorrentBot
             return;
         }
 
-        if (($this->config['ytdlp_enabled'] ?? false) && $this->isYtdlpUrl($text)) {
-            $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $text, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
-            $this->tgSendMessage($chatId, "🎬 URL detected. Choose format:", 'Markdown', $this->tgYtdlpFormatKeyboard());
-            return;
+        if ($this->config['ytdlp_enabled'] ?? false) {
+            $ytdlpUrl = $this->extractMessageUrl($m);
+            if ($ytdlpUrl !== null) {
+                $this->pendingDownloads[$chatId] = ['type' => 'ytdlp', 'url' => $ytdlpUrl, 'disk_idx' => $this->config['default_disk_idx'], 'user_id' => $m['from']['id'], 'expires' => time() + 600];
+                $this->tgSendMessage($chatId, "🎬 URL detected. Choose format:", 'Markdown', $this->tgYtdlpFormatKeyboard());
+                return;
+            }
         }
 
         $this->processMedia($m, $chatId);
@@ -1105,6 +1108,66 @@ final class QBittorrentBot
             }
         }
         return false;
+    }
+
+    /**
+     * Extracts the first allowlisted yt-dlp URL found anywhere in the given text.
+     *
+     * Unlike `isYtdlpUrl()`, this method does not require the whole string to be a URL, so it
+     * handles links shared with a title or other surrounding text (e.g. mobile share actions).
+     * Trailing punctuation is stripped before validation.
+     *
+     * @param string $text Arbitrary message text or caption.
+     * @return string|null The clean allowlisted URL, or `null` when none is found.
+     */
+    private function extractYtdlpUrl(string $text): ?string
+    {
+        if (!preg_match_all('#https?://[^\s<>"\']+#i', $text, $matches)) {
+            return null;
+        }
+        foreach ($matches[0] as $candidate) {
+            $candidate = rtrim($candidate, ".,;:!?)]}'\"");
+            if ($this->isYtdlpUrl($candidate)) {
+                return $candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extracts an allowlisted yt-dlp URL from a Telegram message payload.
+     *
+     * Checks the message text, its caption, and hidden `text_link` entities. This supports
+     * messages where the URL is embedded in surrounding text, attached to a title, or placed
+     * in the caption of a media message.
+     *
+     * @param array $m The Telegram message payload.
+     * @return string|null The clean allowlisted URL, or `null` when none is found.
+     */
+    private function extractMessageUrl(array $m): ?string
+    {
+        foreach (['text', 'caption'] as $field) {
+            if (isset($m[$field]) && is_string($m[$field])) {
+                $url = $this->extractYtdlpUrl($m[$field]);
+                if ($url !== null) {
+                    return $url;
+                }
+            }
+        }
+        foreach (['entities', 'caption_entities'] as $field) {
+            if (!isset($m[$field]) || !is_array($m[$field])) {
+                continue;
+            }
+            foreach ($m[$field] as $entity) {
+                if (is_array($entity) && ($entity['type'] ?? '') === 'text_link' && isset($entity['url']) && is_string($entity['url'])) {
+                    $url = $this->extractYtdlpUrl($entity['url']);
+                    if ($url !== null) {
+                        return $url;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     /**

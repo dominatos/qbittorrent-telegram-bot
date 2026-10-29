@@ -2,6 +2,16 @@
 
 The bot supports downloading videos and extracting audio from YouTube, Twitter, TikTok, and many other websites using `yt-dlp`. This guide covers how to set it up, common pitfalls, and how to bypass YouTube's recent anti-bot mechanisms.
 
+## Sharing Links from Mobile Apps
+Sharing a video from the YouTube mobile app often includes the video title in the same message as the link:
+
+```
+Some Video Title
+https://youtu.be/XXXXXXXX?si=YYYY
+```
+
+The bot does not require the message to contain only a URL. It extracts the first allowlisted link from the message text, caption, or hidden link entity, so shared links with surrounding text work normally.
+
 ## Prerequisites
 To successfully download videos and extract audio, your system must have the following installed:
 1. **yt-dlp** (The core downloader)

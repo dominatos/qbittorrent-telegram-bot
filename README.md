@@ -245,7 +245,7 @@ YouTube frequently blocks anonymous `yt-dlp` requests with a "Sign in to confirm
 
 1. **Send a magnet link** → Bot prompts for disk/category
 2. **Upload a `.torrent` file** → Same interactive selection
-3. **Send a video URL** (YouTube, Vimeo, etc.) → Prompts for format (Video/Audio), then destination selection, downloads via yt-dlp
+3. **Send a video URL** (YouTube, Vimeo, etc.) → Prompts for format (Video/Audio), then destination selection, downloads via yt-dlp. Links shared with surrounding text (e.g. the title added by the YouTube mobile app) are detected too.
 4. **Check status**: Send `/status` to see active downloads
 5. **Completion**: Bot notifies when downloads finish
 
