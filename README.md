@@ -245,7 +245,7 @@ YouTube frequently blocks anonymous `yt-dlp` requests with a "Sign in to confirm
 
 1. **Send a magnet link** → Bot prompts for disk/category
 2. **Upload a `.torrent` file** → Same interactive selection
-3. **Send a video URL** (YouTube, Vimeo, etc.) → Prompts for format (Video/Audio), then destination selection, downloads via yt-dlp
+3. **Send a video URL** (YouTube, Vimeo, etc.) → Prompts for format (Video/Audio), then destination selection, downloads via yt-dlp. Links shared with surrounding text (e.g. the title added by the YouTube mobile app) are detected too.
 4. **Check status**: Send `/status` to see active downloads
 5. **Completion**: Bot notifies when downloads finish
 
@@ -273,6 +273,29 @@ chmod 644 data/bot_state.json
 2. **Verify credentials** in `config.php`
 3. **Docker networking**: Use `host.docker.internal` instead of `127.0.0.1` on macOS/Windows
 4. **Firewall**: Ensure port 8080 is accessible
+5. **Authentication disabled (HTTP 204 error)**:
+   If your log shows `qBittorrent login failed. HTTP Code: 204` followed by `qbRequest failed: No login cookie`, this can have two causes on bot v1.2.25 and earlier:
+   - **Authentication is disabled** in qBittorrent (no session cookie is issued at all), or
+   - **Some qBittorrent 5.x releases** return HTTP 204 with a `QBT_SID_<port>=` cookie instead of `SID=`, which older bot versions did not recognise.
+
+   **Recommended fix:** Upgrade the bot to v1.2.27+, which handles both cases correctly.
+
+   **Workaround — auth disabled only (v1.2.25 and earlier):**
+   If authentication is genuinely disabled and you cannot upgrade, enable it in qBittorrent:
+   - Open qBittorrent → **Tools → Options → Web UI**
+   - Uncheck **"Bypass authentication for clients on localhost"** (if checked)
+   - Ensure a username and password are set
+   - Update your `config.php`:
+     ```php
+     'qb_url'  => 'http://192.168.100.4:8080',
+     'qb_user' => 'admin',
+     'qb_pass' => 'your_password',
+     ```
+   - Restart the bot
+
+   > **Note:** If your qBittorrent authentication *is* enabled but uses a `QBT_SID_<port>=` session cookie (some 5.x releases), enabling authentication will not help — upgrade to v1.2.27+ instead.
+
+   > **v1.2.27+:** The bot inspects response headers for any session cookie (`SID=` or `QBT_SID_<port>=`) before checking the status code. HTTP 204 without a session cookie activates bypass mode; HTTP 204 with a cookie is treated as a normal authenticated session.
 
 ### Bot Not Responding
 
